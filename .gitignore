@@ -1,0 +1,22 @@
+# Профиль пациента и ключи
+/profile.json
+/profile.*.json
+!/profile.example.json
+/config.json
+/config.*.json
+!/config.example.json
+.env
+.env.*
+*.bak
+
+# Данные приложения
+/state.json
+/logs/
+/.cache/
+*.log
+
+# Python и редакторы
+/.venv/
+__pycache__/
+*.py[cod]
+.DS_Store

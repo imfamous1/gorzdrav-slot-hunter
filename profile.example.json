@@ -1,0 +1,10 @@
+{
+  "last_name": "",
+  "first_name": "",
+  "middle_name": "",
+  "birthdate": "",
+  "email": null,
+  "phone": null,
+  "consent_booking": false,
+  "patient_ids": {}
+}

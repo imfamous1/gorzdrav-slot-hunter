@@ -1,0 +1,24 @@
+{
+  "poll_interval_sec": 60,
+  "heartbeat_hours": 0,
+  "http": {
+    "timeout_sec": 30,
+    "sleep_between_requests_sec": 1.0,
+    "insecure_tls": false,
+    "direct_interface": null
+  },
+  "telegram": {
+    "enabled": false,
+    "bot_token": "",
+    "chat_id": ""
+  },
+  "notify": {
+    "desktop_notification": false
+  },
+  "auto_book": {
+    "enabled": false,
+    "stop_after_booking": true,
+    "stop_if_same_specialty": true
+  },
+  "targets": []
+}
