@@ -1,2 +1,2 @@
 requests>=2.31,<3
-certifi>=2023.7.22
+certifi>=2026.10.23
