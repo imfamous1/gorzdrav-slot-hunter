@@ -15,21 +15,18 @@ def main():
         from gorzdrav_hunter.desktop_worker import run_worker
         return run_worker(args[1])
 
-    from gorzdrav_hunter.desktop import DesktopApp
-    from tkinter import Tk
+    from gorzdrav_hunter.desktop import create_window
 
-    root = Tk()
-    app = DesktopApp(root, load_catalog=not args)
+    application, engine, controller = create_window(load_catalog=not args)
     if args[:1] == ['--check'] and len(args) == 2:
         from gorzdrav_hunter.tls import build_bundle
 
         build_bundle()
-        root.update_idletasks()
+        application.processEvents()
         Path(args[1]).write_text('ok', encoding='utf-8')
-        root.destroy()
+        engine.rootObjects()[0].close()
         return 0
-    root.mainloop()
-    return 0
+    return application.exec()
 
 
 if __name__ == '__main__':

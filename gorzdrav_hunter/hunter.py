@@ -42,12 +42,13 @@ def _slot_from_api(lpu_id: int, spec: dict, doc: dict, raw: dict) -> Slot:
 
 class Hunter:
     def __init__(self, client: GorzdravClient, cfg: dict, notifier,
-                 booker: Booker | None = None):
+                 booker: Booker | None = None, *, persist_state=None):
         self.client = client
         self.cfg = cfg
         self.notifier = notifier
         self.booker = booker
-        self.rescheduler = Rescheduler(client, booker, notifier)
+        self.persist_state = persist_state
+        self.rescheduler = Rescheduler(client, booker, notifier, persist_state=persist_state)
         self.state = None  # передаётся снаружи (cli), чтобы `slots` не сохранял
 
     # ------------------------------------------------------------ matching
@@ -111,7 +112,7 @@ class Hunter:
         state['last_scan'] = scan_time
         state['found_cache_time'] = scan_time
         if persist:
-            save_state(state)
+            (self.persist_state or save_state)(state)
         return stop
 
     def _scan_target(self, state, target, *, persist, notify, dry_run,

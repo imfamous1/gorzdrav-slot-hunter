@@ -33,6 +33,7 @@ def build(output: Path) -> Path:
             '--noconfirm', '--specpath', str(work), '--distpath', str(dist),
             '--workpath', str(work / 'build'),
             '--add-data', f"{ROOT / 'ca' / 'russian_trusted_root_ca.pem'}:ca",
+            '--add-data', f"{ROOT / 'gorzdrav_hunter' / 'qml'}:gorzdrav_hunter/qml",
             '--add-data', f"{ROOT / 'LICENSE'}:.",
             '--icon', str(assets / ('AppIcon.icns' if mac else 'AppIcon.ico')),
         ]

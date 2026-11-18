@@ -42,9 +42,13 @@ jobs:
           cache-dependency-path: requirements-build.txt
       - run: python -m pip install -r requirements-build.txt
       - run: python -m unittest discover -s tests -v
+        env:
+          GORZDRAV_QT_PREVIEW: ${{ runner.temp }}/gorzdrav-interface.png
       - run: python packaging/build_desktop.py
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: GorzdravSlotHunter-${{ matrix.name }}
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            ${{ runner.temp }}/gorzdrav-interface.png
           if-no-files-found: error

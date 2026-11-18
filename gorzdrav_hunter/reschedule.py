@@ -39,10 +39,11 @@ def _destination_exists(records: list[dict], slot: Slot) -> bool:
 
 
 class Rescheduler:
-    def __init__(self, client, booker, notifier):
+    def __init__(self, client, booker, notifier, *, persist_state=None):
         self.client = client
         self.booker = booker
         self.notifier = notifier
+        self.persist_state = persist_state
 
     def submit(self, state: dict, target: dict, slot: Slot, *, dry_run: bool) -> bool:
         if dry_run:
@@ -60,17 +61,20 @@ class Rescheduler:
         if (old is None or old.get('isAppointmentByReferral') or old.get('referralId')
                 or _destination_exists(records, slot)):
             state['reschedules'][source_id] = {'status': 'blocked'}
-            save_state(state)
+            (self.persist_state or save_state)(state)
             self.notifier.broadcast(
                 'Перенос остановлен. Проверь исходный и новый талоны в списке записей Горздрава.',
                 kind='WARN',
             )
             return True
+        should_stop = getattr(self.booker, 'should_stop', None)
+        if should_stop is not None and should_stop():
+            return False
 
         # Состояние сохраняется до POST: после сбоя или перезапуска разрешено только читать.
         transfer = {'status': 'submitted', 'slot': asdict(slot)}
         state['reschedules'][source_id] = transfer
-        save_state(state)
+        (self.persist_state or save_state)(state)
         try:
             self.client.appointment_change(
                 lpu_id=target['lpu_id'], patient_id=patient_id,
@@ -80,7 +84,7 @@ class Rescheduler:
             log.warning('Горздрав вернул код %s при переносе. Проверяю записи.', error.code)
             if error.code in (39, 645):
                 transfer['slot_unavailable'] = True
-                save_state(state)
+                (self.persist_state or save_state)(state)
         return self._check_portal(state, target, patient_id)
 
     def reconcile(self, state: dict, target: dict, *, dry_run: bool) -> bool:
@@ -110,7 +114,7 @@ class Rescheduler:
         if new and old is None:
             transfer['status'] = 'completed'
             record_booking(state, target, slot)
-            save_state(state)
+            (self.persist_state or save_state)(state)
             self.notifier.broadcast('✅ ПРИЁМ ПЕРЕНЕСЁН\n' + self.booker.card(target, slot), kind='OK')
             self.notifier.desktop_notify('Приём перенесён', slot.visit_start)
             log.info('Горздрав подтвердил перенос на %s.', slot.visit_start)
@@ -119,7 +123,7 @@ class Rescheduler:
             seen = state['seen'].setdefault(str(target['lpu_id']), {})
             seen[f'{slot.doctor_id}:{slot.id}'] = datetime.now().isoformat(timespec='seconds')
             del state['reschedules'][source_id]
-            save_state(state)
+            (self.persist_state or save_state)(state)
             log.info('Талон уже занят. Исходная запись на месте, продолжаю поиск.')
             return False
         self._warn_pending(state, transfer)
@@ -129,7 +133,7 @@ class Rescheduler:
     def _warn_pending(self, state: dict, transfer: dict) -> None:
         if not transfer.get('warned'):
             transfer['warned'] = True
-            save_state(state)
+            (self.persist_state or save_state)(state)
             self.notifier.broadcast(
                 'Горздрав пока не подтвердил перенос. Скрипт проверяет список записей. '
                 'Проверить вручную можно на https://gorzdrav.spb.ru/service-cancel',

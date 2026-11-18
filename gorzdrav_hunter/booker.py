@@ -27,8 +27,9 @@ def initials(last: str, first: str, middle: str = '') -> str:
 
 class Booker:
     def __init__(self, client: GorzdravClient, profile: dict | None, notifier, *,
-                 should_stop: Callable[[], bool] | None = None):
+                 should_stop: Callable[[], bool] | None = None, persist_profile=None):
         self.should_stop = should_stop
+        self.persist_profile = persist_profile
         self.client = client
         self.profile = profile
         self.notifier = notifier
@@ -84,7 +85,7 @@ class Booker:
         if pid:
             cache[str(lpu_id)] = pid
             from .config import save_profile  # локальный импорт — цикл не нужен
-            save_profile(p)
+            (self.persist_profile or save_profile)(p)
             log.info('patientId для ЛПУ %s найден и закэширован.', lpu_id)
         return pid
 

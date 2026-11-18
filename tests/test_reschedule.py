@@ -43,7 +43,7 @@ class RescheduleTests(unittest.TestCase):
         self.old = record(SOURCE_ID, SOURCE_START, 'doctor-a')
         self.new = record('confirmed-new', DESTINATION.visit_start, DESTINATION.doctor_id)
         self.client = Mock(spec=GorzdravClient)
-        self.booker = Mock(profile={'consent_booking': True})
+        self.booker = Mock(profile={'consent_booking': True}, should_stop=None)
         self.booker.patient_id.return_value = 'fixture-patient'
         self.booker.card.return_value = 'Карточка талона'
         self.notifier = Mock()
