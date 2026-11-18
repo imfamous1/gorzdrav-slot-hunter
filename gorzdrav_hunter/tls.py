@@ -12,15 +12,15 @@ import logging
 import os
 import tempfile
 from pathlib import Path
+from .paths import RESOURCES, data_path
 
 log = logging.getLogger(__name__)
 
-ROOT = Path(__file__).resolve().parent.parent
-RU_ROOT_CA = ROOT / 'ca' / 'russian_trusted_root_ca.pem'
+RU_ROOT_CA = RESOURCES / 'ca' / 'russian_trusted_root_ca.pem'
 # SHA-256 PEM-файла из официального источника.
 EXPECTED_SHA256 = '936a43fea6e8e525bcc0f81acd9c3d21b4fc4b9b68acea7906d698005afc6504'
 
-CACHE_DIR = ROOT / '.cache'
+CACHE_DIR = data_path() / '.cache'
 BUNDLE_PATH = CACHE_DIR / 'ca-bundle.pem'
 
 

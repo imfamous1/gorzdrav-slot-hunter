@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 import logging
 import time
 from datetime import datetime
@@ -25,7 +26,9 @@ def initials(last: str, first: str, middle: str = '') -> str:
 
 
 class Booker:
-    def __init__(self, client: GorzdravClient, profile: dict | None, notifier):
+    def __init__(self, client: GorzdravClient, profile: dict | None, notifier, *,
+                 should_stop: Callable[[], bool] | None = None):
+        self.should_stop = should_stop
         self.client = client
         self.profile = profile
         self.notifier = notifier
@@ -187,6 +190,8 @@ class Booker:
     def _create_with_retries(self, target: dict, slot: Slot, body: dict) -> str:
         attempts, max_attempts = 0, 3
         while attempts < max_attempts:
+            if self.should_stop is not None and self.should_stop():
+                return 'declined'
             attempts += 1
             try:
                 self.client.appointment_create(body)

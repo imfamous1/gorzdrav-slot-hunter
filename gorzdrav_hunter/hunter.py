@@ -11,11 +11,13 @@ from __future__ import annotations
 import logging
 import random
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
 
 from .booker import Booker
 from .client import GorzdravClient, GorzdravError, Slot, portal_link
-from .config import format_date_window, save_state
+from .config import format_date_window, record_booking, save_state
+from .reschedule import Rescheduler
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +47,7 @@ class Hunter:
         self.cfg = cfg
         self.notifier = notifier
         self.booker = booker
+        self.rescheduler = Rescheduler(client, booker, notifier)
         self.state = None  # передаётся снаружи (cli), чтобы `slots` не сохранял
 
     # ------------------------------------------------------------ matching
@@ -114,6 +117,24 @@ class Hunter:
     def _scan_target(self, state, target, *, persist, notify, dry_run,
                      interactive) -> bool:
         lpu_key = str(target['lpu_id'])
+        source = target.get('reschedule_from')
+        if source:
+            if source['appointment_id'] in state.setdefault('reschedules', {}):
+                return self.rescheduler.reconcile(state, target, dry_run=dry_run or not persist)
+            seen = state['seen'].setdefault(lpu_key, {})
+            candidate = min(
+                (slot for slot in self.collect_slots(target)
+                 if slot.specialty_id == source['specialty_id'] and self._in_window(slot, target)
+                 and self._seen_key(slot) not in seen and slot.id not in state['booked_ids']),
+                key=lambda slot: slot.visit_start,
+                default=None,
+            )
+            if candidate is None:
+                log.info('ЛПУ %s: для переноса пока нет подходящих талонов (%s).',
+                         target['lpu_id'], format_date_window(target))
+                return False
+            return self.rescheduler.submit(state, target, candidate, dry_run=dry_run or not persist)
+
         paused = state['paused'].get(lpu_key)
         if paused:
             if not dry_run and self._try_unpause(state, target):
@@ -155,7 +176,7 @@ class Hunter:
                     interactive=interactive,
                 )
                 if result == 'booked':
-                    self.record_booking(state, target, earliest)
+                    record_booking(state, target, earliest)
                     self._mark_seen(state, target, slots)
                     return bool(self.cfg['auto_book'].get('stop_after_booking', True))
                 if result in ('exists', 'declined'):
@@ -203,18 +224,6 @@ class Hunter:
     @staticmethod
     def _seen_key(s: Slot) -> str:
         return f'{s.doctor_id}:{s.id}'
-
-    @staticmethod
-    def record_booking(state: dict, target: dict, slot: Slot) -> None:
-        if slot.id not in state['booked_ids']:
-            state['booked_ids'].append(slot.id)
-        state['booked'].append({
-            'slot_id': slot.id,
-            'visit_start': slot.visit_start,
-            'doctor': slot.doctor_name,
-            'lpu': target['lpu_name'],
-            'at': datetime.now().isoformat(timespec='seconds'),
-        })
 
     def _mark_seen(self, state, target, slots: list[Slot]) -> None:
         seen = state['seen'].setdefault(str(target['lpu_id']), {})
@@ -276,7 +285,8 @@ class Hunter:
     # ------------------------------------------------------------ loop
 
     def run(self, state, dry_run: bool = False, interactive: bool = False,
-            max_backoff_sec: float = 600.0) -> int:
+            max_backoff_sec: float = 600.0, *,
+            should_stop: Callable[[], bool] | None = None) -> int:
         interval = float(self.cfg['poll_interval_sec'])
         heartbeat_hours = float(self.cfg.get('heartbeat_hours') or 0)
         last_heartbeat = time.monotonic()
@@ -287,13 +297,13 @@ class Hunter:
             ' (DRY-RUN)' if dry_run else '',
         )
         try:
-            while True:
+            while should_stop is None or not should_stop():
                 try:
                     stop = self.scan_once(state, dry_run=dry_run, persist=not dry_run,
                                           interactive=interactive)
                     failures = 0
                     if stop:
-                        log.info('Хантер завершил работу по результату записи.')
+                        log.info('Фоновый опрос завершён.')
                         return 0
                 except GorzdravError as e:
                     failures += 1
@@ -312,7 +322,15 @@ class Hunter:
                 wait = interval * (2 ** min(failures, 4)) if failures else interval
                 wait = max(30.0, min(wait * random.uniform(0.9, 1.1), max_backoff_sec))
                 log.debug('Пауза %.0fс', wait)
-                time.sleep(wait)
+                if should_stop is None:
+                    time.sleep(wait)
+                    continue
+                deadline = time.monotonic() + wait
+                while (remaining := deadline - time.monotonic()) > 0:
+                    if should_stop():
+                        return 0
+                    time.sleep(min(remaining, 1.0))
+            return 0
         except KeyboardInterrupt:
             self.notifier.info('Остановлено вручную (Ctrl+C). Состояние сохранено.')
             return 130

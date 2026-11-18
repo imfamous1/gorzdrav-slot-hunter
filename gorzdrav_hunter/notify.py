@@ -34,6 +34,8 @@ class Notifier:
     # ------------------------------------------------------------- terminal
 
     def _print(self, kind: str, text: str) -> None:
+        if sys.stdout is None:
+            return
         stamp = datetime.now().strftime('%H:%M:%S')
         if sys.stdout.isatty():
             print(f'{stamp} {COLORS.get(kind, "")}[{kind}]{RESET} {text}', flush=True)

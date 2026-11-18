@@ -8,3 +8,24 @@
 
 Для воспроизведения ошибки используй вымышленные данные. При добавлении
 сетевых сценариев сохраняй последовательный опрос и ограничение частоты.
+
+## Запуск и сборка настольного приложения
+
+Для запуска из исходников нужен Python с Tk. Установи зависимости из
+`requirements.txt` и запусти `python desktop_app.py`.
+
+Для архива установи зависимости сборки и запусти упаковку на нужной ОС.
+
+```bash
+python -m pip install -r requirements-build.txt
+python packaging/build_desktop.py
+```
+
+GitHub Actions собирает Windows x64 и macOS для Apple Silicon и Intel.
+Каждая сборка проверяет, что упакованное приложение может открыть окно и
+загрузить комплектный сертификат. Архивы создаются в `dist/`.
+
+Данные настольной версии находятся в `%LOCALAPPDATA%\GorzdravSlotHunter` на
+Windows и `~/Library/Application Support/Gorzdrav Slot Hunter` на macOS.
+Для изолированных прогонов можно указать другой каталог через
+`GORZDRAV_HOME`.

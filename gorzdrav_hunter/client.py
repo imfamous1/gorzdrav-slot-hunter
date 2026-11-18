@@ -272,6 +272,19 @@ class GorzdravClient:
     def appointment_cancel(self, body: dict) -> None:
         self._call('POST', '/appointment/cancel', json_body=body)
 
+    def appointment_change(
+        self, *, lpu_id: int, patient_id: str, previous_id: str, slot_id: str,
+    ) -> None:
+        """Штатный перенос с портала, обе записи передаются в одном запросе."""
+        self._call('POST', '/appointment/change', json_body={
+            'esiaId': None,
+            'appointmentId': slot_id,
+            'previousAppointmentId': previous_id,
+            'lpuId': str(lpu_id),
+            'patientId': patient_id,
+            'referralId': None,
+        })
+
     def patient_update_phone(self, lpu_id: int, patient_id: str, phone10: str) -> None:
         body = {
             'lpuId': str(lpu_id),

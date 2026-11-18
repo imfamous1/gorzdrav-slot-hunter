@@ -9,13 +9,20 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+from .paths import data_path
+
+if TYPE_CHECKING:
+    from .client import Slot
 
 log = logging.getLogger(__name__)
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = data_path()
 CONFIG_PATH = ROOT / 'config.json'
 PROFILE_PATH = ROOT / 'profile.json'
 STATE_PATH = ROOT / 'state.json'
@@ -62,7 +69,14 @@ def _write_json(path: Path, data) -> None:
         with handle:
             json.dump(data, handle, ensure_ascii=False, indent=2)
             handle.write('\n')
-        os.replace(tmp, path)
+        for attempt in range(4):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if sys.platform != 'win32' or attempt == 3:
+                    raise
+                time.sleep(0.05)
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -113,6 +127,18 @@ def normalize_target(t: dict, cfg: dict) -> dict:
         raise ValueError(f'Цель lpu_id={lpu_id}: укажи специальность через ./hunt.sh explore.')
     doctor_ids = [str(x) for x in (t.get('doctor_ids') or [])]
     ab = cfg.get('auto_book', {})
+    source = t.get('reschedule_from')
+    if source is not None:
+        visit_start = datetime.fromisoformat(source['visit_start'])
+        appointment_id = str(source['appointment_id']).strip() if source['appointment_id'] else ''
+        specialty_id = str(source['specialty_id']).strip() if source['specialty_id'] else ''
+        if not appointment_id or not specialty_id or visit_start.date() >= start:
+            raise ValueError(f'Цель lpu_id={lpu_id}: проверь исходный талон и даты переноса.')
+        source = {
+            'appointment_id': appointment_id,
+            'specialty_id': specialty_id,
+            'visit_start': visit_start.isoformat(timespec='seconds'),
+        }
     return {
         'lpu_id': lpu_id,
         'lpu_name': t.get('lpu_name') or f'ЛПУ {lpu_id}',
@@ -123,6 +149,7 @@ def normalize_target(t: dict, cfg: dict) -> dict:
         'doctor_ids': doctor_ids,
         'book_date_from': start.isoformat(),
         'book_date_to': end.isoformat() if end is not None else None,
+        'reschedule_from': source,
         'notify_out_of_window': bool(t.get('notify_out_of_window', True)),
         'auto_book': bool(t.get('auto_book', ab.get('enabled', False))),
         'stop_if_same_specialty': bool(
@@ -187,8 +214,21 @@ def load_state() -> dict:
     state.setdefault('found_cache_time', None)
     state.setdefault('last_scan', None)
     state.setdefault('paused', {})      # lpu_id → {reason, since}
+    state.setdefault('reschedules', {})
     return state
 
 
 def save_state(state: dict) -> None:
     _write_json(STATE_PATH, state)
+
+
+def record_booking(state: dict, target: dict, slot: Slot) -> None:
+    if slot.id not in state['booked_ids']:
+        state['booked_ids'].append(slot.id)
+    state['booked'].append({
+        'slot_id': slot.id,
+        'visit_start': slot.visit_start,
+        'doctor': slot.doctor_name,
+        'lpu': target['lpu_name'],
+        'at': datetime.now().isoformat(timespec='seconds'),
+    })

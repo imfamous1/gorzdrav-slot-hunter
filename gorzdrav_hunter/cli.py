@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import logging
 import sys
 from dataclasses import asdict
@@ -22,10 +21,12 @@ from .booker import Booker
 from .client import GorzdravClient, GorzdravError, Slot
 from .config import (
     LOG_DIR, PROFILE_PATH, ROOT, STATE_PATH, _read_json, _write_json,
-    format_date_window, load_config, load_profile, load_state, profile_is_ready, save_state,
+    format_date_window, load_config, load_profile, load_state, profile_is_ready, record_booking,
+    save_state,
 )
 from .hunter import Hunter
 from .notify import Notifier
+from .process_lock import process_lock
 from .tls import resolve_verify
 
 log = logging.getLogger('gorzdrav')
@@ -116,7 +117,7 @@ def cmd_book(args) -> int:
         print('Номер не найден в последнем выводе ./hunt.sh slots.')
         return 1
     slot = Slot(**snapshot['slots'][args.n - 1])
-    _, cfg, _, booker, hunter = _build(args)
+    _, cfg, _, booker, _ = _build(args)
     target = next((t for t in cfg['targets'] if t['lpu_id'] == slot.lpu_id), None)
     if target is None:
         print('Поликлиника больше не входит в цели. Выполни ./hunt.sh slots.')
@@ -125,7 +126,7 @@ def cmd_book(args) -> int:
     if result in ('booked', 'unverified'):
         state = load_state()
         if result == 'booked':
-            hunter.record_booking(state, target, slot)
+            record_booking(state, target, slot)
         elif slot.id not in state['booked_ids']:
             state['booked_ids'].append(slot.id)
         save_state(state)
@@ -155,6 +156,16 @@ def cmd_status(args) -> int:
               f'окно {format_date_window(t)} | '
               f'автозапись: {"вкл" if t["auto_book"] else "выкл"} | '
               f'пауза: {state["paused"].get(str(t["lpu_id"]), {}).get("reason", "нет")}')
+        if source := t.get('reschedule_from'):
+            transfer = state['reschedules'].get(source['appointment_id'], {})
+            statuses = {
+                'submitted': 'проверяем результат на портале',
+                'completed': 'подтверждён',
+                'blocked': 'остановлен, нужна проверка записи',
+            }
+            status = statuses.get(transfer.get('status'), 'ищем подходящий талон')
+            old = source['visit_start'].replace('T', ' ')[:16]
+            print(f'    Перенос приёма от {old}: {status}')
     print(f'Последний успешный опрос: {state.get("last_scan") or "—"}')
     seen_total = sum(len(v) for v in state['seen'].values())
     print(f'Виденных слотов в состоянии: {seen_total} | '
@@ -232,14 +243,12 @@ def main(argv=None) -> int:
 
     try:
         if args.cmd in ('hunt', 'slots', 'book', 'forget'):
-            CACHE_DIR.mkdir(exist_ok=True)
-            with LOCK_PATH.open('a') as lock:
-                try:
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
-                    log.error('Скрипт уже работает. Останови текущий запуск перед этой командой.')
-                    return 1
-                return args.fn(args)
+            try:
+                with process_lock(LOCK_PATH):
+                    return args.fn(args)
+            except BlockingIOError:
+                log.error('Скрипт уже работает. Останови текущий запуск перед этой командой.')
+                return 1
         return args.fn(args)
     except GorzdravError as error:
         log.error('%s (код %s)', error.friendly, error.code)
