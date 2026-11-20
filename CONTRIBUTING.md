@@ -30,6 +30,18 @@ GitHub Actions собирает Windows x64 и macOS для Apple Silicon и Int
 В публикуемые архивы добавляются тексты лицензий Qt и уведомление со
 ссылками на соответствующие исходники, как в [релизе v1.2.0](https://github.com/imfamous1/gorzdrav-slot-hunter/releases/tag/v1.2.0).
 
+Для встроенного обновления сначала обнови `__version__`, собери три ZIP и
+добавь тексты лицензий. Затем подпиши манифест финальных архивов:
+
+```bash
+python packaging/sign_update.py --key /path/to/update-ed25519.key /path/to/final-zips
+```
+
+Загрузи три ZIP, `update-manifest.json` и `update-manifest.sig` в один
+релиз GitHub с тегом `v<версия>`. Публикуй релиз после загрузки всех файлов.
+Подпись связывает имя, размер и SHA-256 каждого архива с тегом релиза.
+Храни закрытый ключ вне репозитория. Приложение содержит только открытый ключ.
+
 Данные настольной версии находятся в `%LOCALAPPDATA%\GorzdravSlotHunter` на
 Windows и `~/Library/Application Support/Gorzdrav Slot Hunter` на macOS.
 Для изолированных прогонов можно указать другой каталог через

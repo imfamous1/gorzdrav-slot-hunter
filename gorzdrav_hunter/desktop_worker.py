@@ -219,8 +219,10 @@ def start_search(
         _launch_worker(uuid4().hex, executable=executable)
 
 
-def _launch_worker(run_id, *, executable=None, per_job=False):
+def _launch_worker(run_id, *, executable=None, per_job=False, resume_at=None):
     status = {'id': run_id, 'phase': 'starting', 'started_at': time.time(), 'per_job': per_job}
+    if resume_at is not None:
+        status['resume_at'] = resume_at
     _write_json(STATUS, status)
     args = [str(executable or sys.executable)]
     if executable is None and not getattr(sys, 'frozen', False):
@@ -505,6 +507,8 @@ def run_worker(run_id: str) -> int:
                         finish=lambda: _write_json(STATUS, {**status, 'phase': 'finishing'}),
                         run_id=run_id if status.get('per_job') else None,
                     )
+                    while time.time() < status.get('resume_at', 0) and not should_stop():
+                        time.sleep(1)
                     code = search.run(
                         state, should_stop=(lambda: should_stop() or search.settle_jobs())
                         if search.run_id else should_stop,

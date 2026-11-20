@@ -7,6 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 from queue import SimpleQueue
 import re
+import sys
 import threading
 from uuid import uuid4
 
@@ -16,10 +17,13 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow
 from PySide6.QtQuickControls2 import QQuickStyle
 
+from . import __version__
 from .client import GorzdravClient, GorzdravError
 from .config import CONFIG_PATH, _read_json, _write_json, load_profile, load_state
 from .desktop_catalog import ANY_DOCTOR, CATALOG, fetch_appointments, fetch_catalog, match_choices, visit_label
+from .desktop_install import finish_install, start_installer
 from .desktop_plan import apply_plan, patient_name, read_plan, task_states, task_title, transfer_key
+from .desktop_update import RELEASES, UpdateError, check_release, prepare_update
 from .desktop_worker import (
     ACTIVE_PHASES, CONTROL_LOCK, EVENTS, append_live_plan, job_phase, read_status, start_desktop_job, stop_job,
 )
@@ -181,6 +185,7 @@ class SearchForm:
 class DesktopApp(QObject):
     changed = Signal()
     noticeChanged = Signal()
+    updateChanged = Signal()
     focusRequested = Signal(str)
     confirmationRequested = Signal(str, str)
 
@@ -202,6 +207,10 @@ class DesktopApp(QObject):
         self.patient_form = self._patient_values(self.patient_id)
         self.telegram_form = dict(self.config.get('telegram', {}))
         self.telegram_busy = False
+        self.update_release = None
+        self.update_gate = None
+        self._update = {'version': __version__, 'available': '', 'state': 'idle', 'message': '',
+                        'url': RELEASES + '/latest', 'hasRelease': False}
         self._notices = {}
         self.pending = None
         if not self.selected:
@@ -674,15 +683,83 @@ class DesktopApp(QObject):
         self._background(lambda: Notifier({'telegram': telegram}).telegram(
             'Талоны Горздрава. Проверка уведомлений.'), done)
 
+    @Property('QVariantMap', notify=updateChanged)
+    def update(self):
+        return self._update
 
-def create_window(*, load_catalog=True):
+    def _set_update(self, state, message=''):
+        release = self.update_release
+        self._update = {'version': __version__, 'available': release.version if release else '',
+                        'state': state, 'message': message, 'hasRelease': release is not None,
+                        'url': release.url if release else RELEASES + '/latest'}
+        self.updateChanged.emit()
+
+    @Slot()
+    def checkForUpdate(self):
+        if self._update['state'] in ('checking', 'installing'):
+            return
+        self._set_update('checking', 'Проверяем обновления…')
+
+        def done(release, error):
+            self.update_release = release
+            if error:
+                self._set_update('error', str(error) if isinstance(error, UpdateError) else
+                                 'Не удалось проверить обновления.')
+            else:
+                self._set_update('available' if release else 'current',
+                                 'После установки приложение перезапустится.' if release else
+                                 'Установлена последняя версия.')
+
+        self._background(check_release, done)
+
+    @Slot()
+    def installUpdate(self):
+        release = self.update_release
+        if release is None or self._update['state'] in ('checking', 'installing'):
+            return
+        self._set_update('installing', 'Скачиваем и проверяем обновление…')
+
+        def prepare():
+            work, bundle = prepare_update(release)
+            return start_installer(work, bundle)
+
+        def done(gate, error):
+            if error:
+                self._set_update('error', str(error) if isinstance(error, UpdateError) else
+                                 'Не удалось подготовить установку. Можно скачать архив с GitHub.')
+                return
+            self.update_gate = gate
+            QGuiApplication.instance().quit()
+
+        self._background(prepare, done)
+
+    def updateFinished(self, work):
+        self._set_update('installing', 'Завершаем обновление…')
+
+        def done(message, error):
+            if message or error:
+                self._set_update('error', message or 'Не удалось подтвердить результат обновления.')
+            else:
+                self._set_update('current', 'Обновление установлено.')
+
+        self._background(lambda: finish_install(work), done)
+
+    def releaseUpdateLock(self):
+        if self.update_gate is not None:
+            self.update_gate.__exit__(None, None, None)
+
+
+def create_window(*, load_catalog=True, check_updates=False):
     QQuickStyle.setStyle('Basic')
     application = QGuiApplication([])
     application.setApplicationName('Талоны Горздрава')
+    application.setApplicationVersion(__version__)
     controller = DesktopApp(load_catalog=load_catalog)
     engine = QQmlApplicationEngine()
     engine.setInitialProperties({'bridge': controller})
     engine.load(QUrl.fromLocalFile(str(Path(__file__).with_name('qml') / 'Main.qml')))
     if not engine.rootObjects() or not isinstance(engine.rootObjects()[0], QQuickWindow):
         raise RuntimeError('Не удалось открыть окно Qt Quick.')
+    if check_updates and getattr(sys, 'frozen', False):
+        QTimer.singleShot(600, controller.checkForUpdate)
     return application, engine, controller

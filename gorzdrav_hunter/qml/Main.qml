@@ -7,6 +7,7 @@ ApplicationWindow {
     id: win
     required property var bridge
     readonly property var viewData: bridge.view
+    readonly property var update: bridge.update
     property int page: 0
     readonly property var sections: [
         { name: "Поиск", title: "Поиск талонов", key: "search", icon: "search" },
@@ -199,6 +200,96 @@ ApplicationWindow {
                     font.pixelSize: 12
                     lineHeight: 1.25
                     wrapMode: Text.WordWrap
+                }
+                Button {
+                    id: updateButton
+                    objectName: "updatesMenu"
+                    readonly property bool busy: win.update.state === "checking" || win.update.state === "installing"
+                    Layout.fillWidth: true
+                    Layout.topMargin: 10
+                    implicitHeight: 36
+                    leftPadding: 8
+                    rightPadding: 8
+                    hoverEnabled: true
+                    text: "Версия " + win.update.version
+                    Accessible.name: text + ". Обновления"
+                    Accessible.description: win.update.hasRelease ? "Доступна версия " + win.update.available : ""
+                    onClicked: updatePopup.open()
+                    ToolTip.visible: !updatePopup.visible && (hovered || visualFocus)
+                    ToolTip.delay: 400
+                    ToolTip.text: win.update.hasRelease ? "Доступна версия " + win.update.available : "Обновления приложения"
+                    background: Rectangle {
+                        radius: 8
+                        color: updateButton.hovered || updatePopup.visible || win.update.hasRelease ? T.railActive : "transparent"
+                        border.width: updateButton.visualFocus ? 2 : 0
+                        border.color: "#A9DBCC"
+                    }
+                    contentItem: RowLayout {
+                        spacing: 6
+                        Text {
+                            Layout.fillWidth: true
+                            text: updateButton.text
+                            color: T.railText
+                            font.pixelSize: 12
+                        }
+                        Text {
+                            visible: win.update.hasRelease
+                            text: "Обновить"
+                            color: "#A9DBCC"
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                        }
+                        Icon {
+                            glyph: "update"
+                            tint: win.update.hasRelease ? "#A9DBCC" : T.railSoft
+                            Layout.preferredWidth: 16
+                            Layout.preferredHeight: 16
+                        }
+                    }
+                    Popup {
+                        id: updatePopup
+                        x: updateButton.width + 12
+                        y: updateButton.height - height
+                        width: 310
+                        padding: 16
+                        margins: 12
+                        focus: true
+                        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                        onClosed: updateButton.forceActiveFocus()
+                        background: Rectangle { radius: 13; color: T.surface; border.color: T.border }
+                        contentItem: ColumnLayout {
+                            spacing: 10
+                            Heading {
+                                text: win.update.hasRelease ? "Доступна версия " + win.update.available : "Обновления"
+                                font.pixelSize: 16
+                            }
+                            SecondaryText {
+                                objectName: "updateStatus"
+                                Layout.fillWidth: true
+                                text: win.update.message || "Установлена версия " + win.update.version + "."
+                                color: win.update.state === "error" ? T.danger : T.muted
+                            }
+                            AppButton {
+                                objectName: "updateAction"
+                                Layout.fillWidth: true
+                                enabled: !updateButton.busy
+                                variant: "primary"
+                                text: win.update.hasRelease ? "Скачать и установить" : "Проверить обновления"
+                                onClicked: {
+                                    if (win.update.hasRelease)
+                                        win.bridge.installUpdate()
+                                    else
+                                        win.bridge.checkForUpdate()
+                                }
+                            }
+                            AppButton {
+                                Layout.alignment: Qt.AlignLeft
+                                compact: true
+                                text: win.update.hasRelease ? "Что изменилось на GitHub" : "Релизы на GitHub"
+                                onClicked: Qt.openUrlExternally(win.update.url)
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -31,9 +31,11 @@ def check_window():
     from PySide6.QtGui import QInputMethodEvent
     from PySide6.QtTest import QTest
 
+    from gorzdrav_hunter import __version__
     from gorzdrav_hunter.config import CONFIG_PATH, STATE_PATH, _write_json
     from gorzdrav_hunter.desktop import DesktopApp, create_window
     from gorzdrav_hunter.desktop_plan import apply_plan
+    from gorzdrav_hunter.desktop_update import Release, UpdateError
 
     today = date.today()
     visit = (today + timedelta(days=4)).isoformat() + 'T08:20:00'
@@ -109,6 +111,23 @@ def check_window():
             assert abs(16 - x) < 0.5 and abs(x - right) < 0.5, (name, x, right)
         assert tab_names() == ['working']
         assert locate('searchAction').property('text') == 'Остановить поиск'
+        assert locate('updatesMenu').property('text') == f'Версия {__version__}'
+
+        release = Release('v9.9.9', 'fixture.zip', 1, '0' * 64)
+        with patch('gorzdrav_hunter.desktop.check_release', return_value=release), patch(
+            'gorzdrav_hunter.desktop.prepare_update', side_effect=UpdateError('Проверка тестовой сборки.'),
+        ):
+            click('updatesMenu')
+            click('updateAction')
+            wait_for(lambda: bridge.update['state'] == 'available')
+            assert locate('updateAction').property('text') == 'Скачать и установить'
+            click('updateAction')
+            wait_for(lambda: bridge.update['state'] == 'error')
+            assert locate('updateStatus').property('text') == 'Проверка тестовой сборки.'
+            QTest.keyClick(window, Qt.Key.Key_Escape)
+            wait_for(lambda: locate('updateAction') is None or not locate('updateAction').isVisible())
+        bridge.update_release = None
+        bridge._set_update('idle')
 
         if preview := os.environ.get('GORZDRAV_QT_PREVIEW'):
             window.grabWindow()

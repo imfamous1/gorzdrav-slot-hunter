@@ -47,6 +47,10 @@ Canvas {
         case "down":
             path([7, 10, 12, 15, 17, 10])
             break
+        case "update":
+            path([12, 3, 12, 14]); path([7, 9, 12, 14, 17, 9])
+            path([4, 15, 4, 20, 20, 20, 20, 15])
+            break
         case "info":
             circle(12, 12, 8); path([12, 11, 12, 16]); circle(12, 8, 0.35)
             break
