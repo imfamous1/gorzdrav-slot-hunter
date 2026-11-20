@@ -130,6 +130,8 @@ def check_window():
         assert support.property('text') == 'Поддержать проект'
         assert abs(locate('supportCaption').mapToScene(QPointF()).x()
                    - support.mapToScene(QPointF()).x()) < 1
+        assert abs(locate('supportIcon').mapToScene(QPointF()).x()
+                   - locate('updatesIcon').mapToScene(QPointF()).x()) < 1
         assert support.mapToScene(QPointF(0, support.height())).y() <= locate('updatesMenu').mapToScene(QPointF()).y()
 
         class LinkRecorder(QObject):

@@ -1,3 +1,3 @@
 """gorzdrav-slot-hunter — ловец свободных талонов на gorzdrav.spb.ru."""
 
-__version__ = '1.4.0'
+__version__ = '1.4.1'

@@ -219,18 +219,19 @@ ApplicationWindow {
                     }
                     contentItem: RowLayout {
                         spacing: 8
-                        Icon {
-                            glyph: "heart"
-                            tint: T.railHighlight
-                            Layout.preferredWidth: 16
-                            Layout.preferredHeight: 16
-                        }
                         Text {
                             Layout.fillWidth: true
                             text: supportButton.text
                             color: T.surface
                             font.pixelSize: 12
                             font.weight: Font.DemiBold
+                        }
+                        Icon {
+                            objectName: "supportIcon"
+                            glyph: "heart"
+                            tint: T.railHighlight
+                            Layout.preferredWidth: 16
+                            Layout.preferredHeight: 16
                         }
                     }
                 }
@@ -273,6 +274,7 @@ ApplicationWindow {
                             font.weight: Font.DemiBold
                         }
                         Icon {
+                            objectName: "updatesIcon"
                             glyph: win.update.hasRelease ? "download" : "refresh-cw"
                             tint: win.update.hasRelease ? T.railHighlight : T.railSoft
                             Layout.preferredWidth: 16
