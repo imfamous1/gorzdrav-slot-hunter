@@ -37,11 +37,16 @@ ColumnLayout {
         font.pixelSize: 13
         echoMode: field.secret ? TextInput.Password : TextInput.Normal
         Accessible.name: field.title
+        function resetEmptyMaskCursor() {
+            if (inputMask && cursorPosition > 0 && !/[0-9]/.test(text))
+                cursorPosition = 0
+        }
         function syncValue() {
             // Keep the cursor when a model refresh returns the edit already on screen.
             const shown = inputMask ? getText(0, length) : text
             if (shown !== field.value)
                 text = field.value
+            resetEmptyMaskCursor()
         }
         Component.onCompleted: syncValue()
         Connections {
@@ -49,9 +54,10 @@ ColumnLayout {
             function onValueChanged() { input.syncValue() }
         }
         onTextEdited: field.edited(inputMask ? getText(0, length) : text)
-        onCursorPositionChanged: {
-            if (inputMask && cursorPosition > 0 && !/[0-9]/.test(text))
-                cursorPosition = 0
+        onCursorPositionChanged: resetEmptyMaskCursor()
+        onActiveFocusChanged: {
+            if (activeFocus)
+                resetEmptyMaskCursor()
         }
         background: Rectangle {
             radius: 10

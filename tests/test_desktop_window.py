@@ -149,11 +149,13 @@ def check_window():
         click('limitSearchTime')
         assert locate('searchTimeHint').isVisible()
         assert 'снизить шансы' in locate('searchTimeHint').property('text')
-        click('searchTimeFromInput')
+        time_from = locate('searchTimeFromInput')
+        time_from.forceActiveFocus()
+        wait_for(time_from.hasActiveFocus)
         for digit in '0930':
             QTest.keyClick(window, ord(digit))
-        assert bridge.form.time_from == '09:30'
-        assert locate('searchTimeFromInput').property('displayText') == '09:30'
+        assert bridge.form.time_from == '09:30', (bridge.form.time_from, time_from.property('cursorPosition'))
+        assert time_from.property('displayText') == '09:30'
         bridge.setSearch('start', '05.12.2031')
         click('searchTab_working')
         wait_for(lambda: bridge.selected == 'working')
