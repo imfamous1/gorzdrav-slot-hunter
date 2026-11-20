@@ -124,3 +124,29 @@ class DesktopSessionsTests(TestCase):
         controller.savePatient()
         profile = self.read_json(self.config_path)['desktop_plan']['patients'][controller.patient_id]
         self.assertEqual(today.strftime('%d.%m.%Y'), profile['birthdate'])
+
+    def test_search_time_is_optional_and_restored_for_saved_jobs(self):
+        controller = self.open_session()
+        prior = self.jobs['stopped']
+        form = self.desktop.SearchForm.from_job(prior, 'test')
+        self.assertFalse(form.time_limited)
+        self.assertEqual((None, None), form.time_bounds())
+        original_scope = self.desktop._job_scope(prior)
+
+        saved = {**prior, 'target': {**prior['target'], 'book_time_to': '12:00'}}
+        form = self.desktop.SearchForm.from_job(saved, 'test')
+        self.assertTrue(form.time_limited)
+        self.assertEqual((None, '12:00'), form.time_bounds())
+        self.assertNotEqual(original_scope, self.desktop._job_scope(saved))
+        target = form.build(saved['target'], controller.plan['patients'])['target']
+        self.assertIsNone(target['book_time_from'])
+        self.assertEqual('12:00', target['book_time_to'])
+
+        controller.newSearch()
+        controller.forms[controller.selected] = form
+        controller.setSearch('time_from', '13:00')
+        with self.assertRaises(self.desktop.FormError) as error:
+            form.time_bounds()
+        self.assertEqual('time_to', error.exception.field)
+        controller.limitSearchTime(False)
+        self.assertEqual((None, None), form.time_bounds())

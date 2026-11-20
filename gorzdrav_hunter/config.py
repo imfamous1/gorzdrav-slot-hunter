@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 import time
@@ -109,6 +110,14 @@ def load_config(*, require_targets: bool = True) -> dict:
     return merged
 
 
+def parse_book_time(value: str | None) -> str | None:
+    if value is None or value == '':
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]', value):
+        raise ValueError('Укажи время в формате ЧЧ:ММ, например 09:30.')
+    return value
+
+
 def normalize_target(t: dict, cfg: dict) -> dict:
     lpu_id = int(t['lpu_id'])
     date_from = t.get('book_date_from')
@@ -119,6 +128,10 @@ def normalize_target(t: dict, cfg: dict) -> dict:
     end = datetime.strptime(date_to, '%Y-%m-%d').date() if date_to is not None else None
     if end is not None and start > end:
         raise ValueError(f'Цель lpu_id={lpu_id}: book_date_from позже book_date_to')
+    time_from = parse_book_time(t.get('book_time_from'))
+    time_to = parse_book_time(t.get('book_time_to'))
+    if time_from and time_to and time_from > time_to:
+        raise ValueError(f'Цель lpu_id={lpu_id}: book_time_from позже book_time_to')
     contains = t.get('specialty_name_contains') or []
     if isinstance(contains, str):
         contains = [contains]
@@ -149,6 +162,8 @@ def normalize_target(t: dict, cfg: dict) -> dict:
         'doctor_ids': doctor_ids,
         'book_date_from': start.isoformat(),
         'book_date_to': end.isoformat() if end is not None else None,
+        'book_time_from': time_from,
+        'book_time_to': time_to,
         'reschedule_from': source,
         'notify_out_of_window': bool(t.get('notify_out_of_window', True)),
         'auto_book': bool(t.get('auto_book', ab.get('enabled', False))),
@@ -161,7 +176,18 @@ def normalize_target(t: dict, cfg: dict) -> dict:
 def format_date_window(target: dict) -> str:
     start = target['book_date_from']
     end = target['book_date_to']
-    return f'{start}…{end}' if end is not None else f'с {start}'
+    dates = f'{start}…{end}' if end is not None else f'с {start}'
+    hours = format_time_window(target)
+    return f'{dates}, ежедневно {hours}' if hours else dates
+
+
+def format_time_window(target: dict) -> str:
+    start, end = target.get('book_time_from'), target.get('book_time_to')
+    if start and end:
+        return f'{start}–{end}'
+    if start:
+        return f'с {start}'
+    return f'до {end}' if end else ''
 
 
 # ---------------------------------------------------------------- profile

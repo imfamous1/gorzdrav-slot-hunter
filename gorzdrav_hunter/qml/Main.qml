@@ -609,6 +609,64 @@ ApplicationWindow {
                                 onEdited: value => win.bridge.setSearch("end", value)
                             }
                         }
+                        CheckBox {
+                            id: limitTime
+                            objectName: "limitSearchTime"
+                            readonly property string warning: "Ограничение по времени может снизить шансы поймать талон."
+                            Layout.fillWidth: true
+                            text: "Ограничить время приёма"
+                            checked: win.viewData.timeLimited
+                            enabled: win.viewData.editable
+                            padding: 0
+                            font.pixelSize: 13
+                            font.weight: Font.DemiBold
+                            palette.windowText: enabled ? T.ink : T.muted
+                            palette.base: checked ? T.accentSoft : T.surface
+                            palette.text: T.accent
+                            palette.mid: checked ? T.accent : T.quiet
+                            palette.light: T.accentSoft
+                            palette.highlight: T.accent
+                            Accessible.description: warning
+                            ToolTip.visible: enabled && !checked && (hovered || visualFocus)
+                            ToolTip.delay: 400
+                            ToolTip.text: warning
+                            onToggled: win.bridge.limitSearchTime(checked)
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: win.viewData.timeLimited
+                            spacing: 9
+                            FormInput {
+                                id: timeFrom
+                                objectName: "searchTimeFrom"
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 108
+                                title: "Время с"
+                                numericMask: "00:00;_"
+                                value: win.viewData.timeFrom
+                                enabled: win.viewData.editable
+                                invalid: search.invalid("time_from")
+                                onEdited: value => win.bridge.setSearch("time_from", value)
+                            }
+                            FormInput {
+                                id: timeTo
+                                objectName: "searchTimeTo"
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 108
+                                title: "Время до"
+                                numericMask: "00:00;_"
+                                value: win.viewData.timeTo
+                                enabled: win.viewData.editable
+                                invalid: search.invalid("time_to")
+                                onEdited: value => win.bridge.setSearch("time_to", value)
+                            }
+                        }
+                        SecondaryText {
+                            objectName: "searchTimeHint"
+                            Layout.fillWidth: true
+                            visible: win.viewData.timeLimited && win.viewData.editable
+                            text: limitTime.warning
+                        }
                     }
                 }
             }
@@ -704,6 +762,8 @@ ApplicationWindow {
                     case "specialty": specialty.focusInput(); break
                     case "start": start.focusInput(); break
                     case "end": end.focusInput(); break
+                    case "time_from": timeFrom.focusInput(); break
+                    case "time_to": timeTo.focusInput(); break
                     case "patient": patient.focusInput(); break
                     case "source": find.forceActiveFocus(); break
                     }

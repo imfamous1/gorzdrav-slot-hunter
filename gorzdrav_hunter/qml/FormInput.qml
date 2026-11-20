@@ -29,7 +29,6 @@ ColumnLayout {
         implicitHeight: 43
         leftPadding: 12
         rightPadding: 12
-        text: field.value
         inputMask: field.numericMask
         placeholderText: field.placeholder
         placeholderTextColor: T.quiet
@@ -38,6 +37,17 @@ ColumnLayout {
         font.pixelSize: 13
         echoMode: field.secret ? TextInput.Password : TextInput.Normal
         Accessible.name: field.title
+        function syncValue() {
+            // Keep the cursor when a model refresh returns the edit already on screen.
+            const shown = inputMask ? getText(0, length) : text
+            if (shown !== field.value)
+                text = field.value
+        }
+        Component.onCompleted: syncValue()
+        Connections {
+            target: field
+            function onValueChanged() { input.syncValue() }
+        }
         onTextEdited: field.edited(inputMask ? getText(0, length) : text)
         onCursorPositionChanged: {
             if (inputMask && cursorPosition > 0 && !/[0-9]/.test(text))

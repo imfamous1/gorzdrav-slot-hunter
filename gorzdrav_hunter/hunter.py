@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 
 from .booker import Booker
 from .client import GorzdravClient, GorzdravError, Slot, portal_link
-from .config import format_date_window, record_booking, save_state
+from .config import format_date_window, parse_book_time, record_booking, save_state
 from .reschedule import Rescheduler
 
 log = logging.getLogger(__name__)
@@ -55,9 +55,19 @@ class Hunter:
 
     @staticmethod
     def _in_window(slot: Slot, target: dict) -> bool:
-        d = slot.visit_start[:10]
+        day = slot.visit_start[:10]
         end = target['book_date_to']
-        return target['book_date_from'] <= d and (end is None or d <= end)
+        if day < target['book_date_from'] or (end is not None and day > end):
+            return False
+        time_from, time_to = target.get('book_time_from'), target.get('book_time_to')
+        if not time_from and not time_to:
+            return True
+        try:
+            starts_at = parse_book_time(slot.visit_start[11:16])
+        except ValueError:
+            return False
+        return bool(starts_at and (not time_from or time_from <= starts_at)
+                    and (not time_to or starts_at <= time_to))
 
     @staticmethod
     def _spec_matches(spec: dict, target: dict) -> bool:

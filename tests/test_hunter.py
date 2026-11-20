@@ -58,6 +58,32 @@ class HunterTests(unittest.TestCase):
         self.assertTrue(self.hunter._in_window(SLOT, bounded))
         self.assertFalse(self.hunter._in_window(later, bounded))
 
+    def test_time_window_matches_start_of_visit_on_every_eligible_day(self):
+        early = replace(SLOT, visit_start='2030-06-10T09:59:00')
+        end = replace(SLOT, visit_start='2030-06-11T12:00:30')
+        late = replace(SLOT, visit_start='2030-06-11T12:01:00')
+        bounded = config.normalize_target(dict(
+            TARGET, book_date_to='2030-06-11', book_time_from='10:00', book_time_to='12:00',
+        ), {})
+        self.assertFalse(self.hunter._in_window(early, bounded))
+        self.assertTrue(self.hunter._in_window(SLOT, bounded))
+        self.assertTrue(self.hunter._in_window(end, bounded))
+        self.assertFalse(self.hunter._in_window(late, bounded))
+        self.assertTrue(self.hunter._in_window(early, dict(bounded, book_time_from=None)))
+        self.assertTrue(self.hunter._in_window(late, dict(bounded, book_time_to=None)))
+        for start, finish in (('24:00', None), ('09:60', None), ('14:00', '12:00')):
+            with self.subTest(start=start, finish=finish), self.assertRaises(ValueError):
+                config.normalize_target(dict(TARGET, book_time_from=start, book_time_to=finish), {})
+
+    def test_autobook_skips_an_earlier_slot_outside_the_time_window(self):
+        earlier = replace(SLOT, id='earlier', visit_start='2030-06-10T08:00:00')
+        self.target['book_time_from'] = '09:00'
+        self.hunter.collect_slots = Mock(return_value=[earlier, SLOT])
+        self.booker.book.return_value = 'booked'
+        self.cfg['auto_book'] = {'stop_after_booking': True}
+        self.assertTrue(self.hunter.scan_once(self.state, persist=False))
+        self.assertEqual(SLOT, self.booker.book.call_args.args[1])
+
     def test_unexpected_error_enters_backoff_without_broadcasting_start(self):
         self.hunter.scan_once = Mock(side_effect=UnboundLocalError('test exception'))
         with self.assertLogs('gorzdrav_hunter.hunter', 'INFO'):

@@ -47,7 +47,7 @@ def check_window():
         'book_date_from': start, 'auto_book': True,
     }
     working = {
-        'target': {**target, 'reschedule_from': {
+        'target': {**target, 'book_time_from': '09:00', 'book_time_to': '13:00', 'reschedule_from': {
             'appointment_id': 'example', 'specialty_id': 'eye', 'visit_start': visit,
         }},
         'patient': 'patient', 'consent': True, 'run': {'worker': 'fixture', 'token': 'active'},
@@ -111,6 +111,9 @@ def check_window():
             assert abs(16 - x) < 0.5 and abs(x - right) < 0.5, (name, x, right)
         assert tab_names() == ['working']
         assert locate('searchAction').property('text') == 'Остановить поиск'
+        assert locate('limitSearchTime').property('checked')
+        assert locate('searchTimeFromInput').property('text') == '09:00'
+        assert not locate('searchTimeFromInput').isEnabled()
         assert locate('updatesMenu').property('text') == f'Версия {__version__}'
 
         release = Release('v9.9.9', 'fixture.zip', 1, '0' * 64)
@@ -141,6 +144,16 @@ def check_window():
         draft = bridge.selected
         assert bridge.view['phase'] == 'draft'
         assert locate('searchAction').property('text') == 'Запустить поиск'
+        assert not locate('limitSearchTime').property('checked')
+        assert not locate('searchTimeFromInput').isVisible()
+        click('limitSearchTime')
+        assert locate('searchTimeHint').isVisible()
+        assert 'снизить шансы' in locate('searchTimeHint').property('text')
+        click('searchTimeFromInput')
+        for digit in '0930':
+            QTest.keyClick(window, ord(digit))
+        assert bridge.form.time_from == '09:30'
+        assert locate('searchTimeFromInput').property('displayText') == '09:30'
         bridge.setSearch('start', '05.12.2031')
         click('searchTab_working')
         wait_for(lambda: bridge.selected == 'working')
@@ -148,6 +161,7 @@ def check_window():
         click('searchTab_' + draft)
         wait_for(lambda: bridge.selected == draft)
         assert bridge.view['start'] == '05.12.2031'
+        assert locate('searchTimeFromInput').property('text') == '09:30'
 
         bridge.form.options['district'] = [
             {'id': 1, 'name': 'Адмиралтейский'},

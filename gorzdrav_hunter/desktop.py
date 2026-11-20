@@ -19,7 +19,7 @@ from PySide6.QtQuickControls2 import QQuickStyle
 
 from . import __version__
 from .client import GorzdravClient, GorzdravError
-from .config import CONFIG_PATH, _read_json, _write_json, load_profile, load_state
+from .config import CONFIG_PATH, _read_json, _write_json, format_time_window, load_profile, load_state, parse_book_time
 from .desktop_catalog import ANY_DOCTOR, CATALOG, fetch_appointments, fetch_catalog, match_choices, visit_label
 from .desktop_install import finish_install, start_installer
 from .desktop_plan import apply_plan, patient_name, read_plan, task_states, task_title, transfer_key
@@ -70,7 +70,8 @@ def _job_scope(job):
     return (
         job.get('patient'), str(target['lpu_id']), target.get('reschedule_from'),
         tuple(target.get('specialty_ids', [])), tuple(target.get('doctor_ids', [])),
-        target['book_date_from'], target.get('book_date_to'), target.get('auto_book'),
+        target['book_date_from'], target.get('book_date_to'),
+        target.get('book_time_from') or None, target.get('book_time_to') or None, target.get('auto_book'),
     )
 
 
@@ -87,6 +88,9 @@ class SearchForm:
     start: str
     end: str
     period: str
+    time_limited: bool = False
+    time_from: str = ''
+    time_to: str = ''
     choices: dict = field(default_factory=dict)
     options: dict = field(default_factory=dict)
     catalog_level: str = ''
@@ -105,8 +109,11 @@ class SearchForm:
         start = parse_date(target.get('book_date_from') or date.today().isoformat())
         end = parse_date(target['book_date_to']) if target.get('book_date_to') else None
         period = 'day' if end and start == end else 'range' if end else 'from'
+        time_from = target.get('book_time_from') or ''
+        time_to = target.get('book_time_to') or ''
         form = cls(mode, job.get('patient', default_patient) or '', start.strftime('%d.%m.%Y'),
-                   end.strftime('%d.%m.%Y') if end else '', period)
+                   end.strftime('%d.%m.%Y') if end else '', period,
+                   time_limited=bool(time_from or time_to), time_from=time_from, time_to=time_to)
         spec = source['specialty_id'] if source else next(iter(target.get('specialty_ids', [])), None)
         doctor = next(iter(target.get('doctor_ids', [])), '')
         for key, value, label in (
@@ -134,6 +141,23 @@ class SearchForm:
         self.source_busy = False
         self.source_note = ''
 
+    def time_bounds(self):
+        if not self.time_limited:
+            return None, None
+        bounds = []
+        for key in ('time_from', 'time_to'):
+            value = getattr(self, key)
+            try:
+                bounds.append(parse_book_time('' if value == '__:__' else value))
+            except ValueError as error:
+                raise FormError(key, str(error)) from None
+        start, end = bounds
+        if not start and not end:
+            raise FormError('time_from', 'Укажи время начала или окончания интервала.')
+        if start and end and start > end:
+            raise FormError('time_to', 'Время окончания должно быть не раньше начала.')
+        return start, end
+
     def build(self, prior, patients):
         if not self.mode:
             raise FormError('mode', 'Выбери «Автозапись» или «Автоперенос».')
@@ -154,6 +178,7 @@ class SearchForm:
                     raise ValueError
             except ValueError:
                 raise FormError('end', 'Конечная дата должна быть не раньше начальной.') from None
+        time_from, time_to = self.time_bounds()
         if self.patient not in patients:
             raise FormError('patient', 'Выбери пациента для записи или переноса.')
         district, clinic, spec = (self.choices[key] for key in FIELD_LABELS)
@@ -164,6 +189,7 @@ class SearchForm:
             'specialty_ids': [str(spec['id'])], 'specialty_label': spec['name'],
             'doctor_ids': [str(doctor['id'])] if doctor['id'] else [],
             'book_date_from': start.isoformat(), 'book_date_to': end.isoformat() if end else None,
+            'book_time_from': time_from, 'book_time_to': time_to,
             'auto_book': True, 'notify_out_of_window': False,
         }
         if doctor['id']:
@@ -258,6 +284,7 @@ class DesktopApp(QObject):
             'editable': phase not in JOB_ACTIVE, 'mode': form.mode, 'patient': form.patient,
             'patientLabel': patient_name(patients.get(form.patient, {})), 'patients': options,
             'start': form.start, 'end': form.end, 'period': form.period,
+            'timeLimited': form.time_limited, 'timeFrom': form.time_from, 'timeTo': form.time_to,
             'choices': {key: (value.get('label') or value['name']) for key, value in form.choices.items()},
             'options': form.options, 'catalogNote': form.catalog_note, 'catalogError': form.catalog_error,
             'sourceBusy': form.source_busy, 'sourceNote': form.source_note,
@@ -354,7 +381,7 @@ class DesktopApp(QObject):
     def setSearch(self, name, value):
         if self._phase(self.selected) in JOB_ACTIVE:
             return
-        if name in ('start', 'end'):
+        if name in ('start', 'end', 'time_from', 'time_to'):
             setattr(self.form, name, value)
         elif name == 'mode' and value in ('book', 'transfer'):
             self.form.mode = value
@@ -362,6 +389,14 @@ class DesktopApp(QObject):
             self.form.period = value
         else:
             return
+        self._notice('search')
+        self.changed.emit()
+
+    @Slot(bool)
+    def limitSearchTime(self, enabled):
+        if self._phase(self.selected) in JOB_ACTIVE:
+            return
+        self.form.time_limited = enabled
         self._notice('search')
         self.changed.emit()
 
@@ -522,6 +557,8 @@ class DesktopApp(QObject):
         else:
             window = 'с ' + window
         summary = f'{patient}\n{target["specialty_label"]} · {target["lpu_name"]}\nДаты поиска: {window}'
+        if hours := format_time_window(target):
+            summary += f'\nВремя приёма {hours}'
         if source:
             summary = f'Текущий приём: {visit_label(source["visit_start"])}\n' + summary
         self.confirmationRequested.emit(title, summary)

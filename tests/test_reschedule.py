@@ -106,15 +106,17 @@ class RescheduleTests(unittest.TestCase):
         self.notifier.broadcast.assert_not_called()
 
     def test_dry_run_selects_earliest_in_same_specialty(self):
-        hunter = Hunter(self.client, {'targets': [TARGET]}, self.notifier, self.booker)
+        target = {**TARGET, 'book_time_from': '13:00', 'book_time_to': '15:00'}
+        hunter = Hunter(self.client, {'targets': [target]}, self.notifier, self.booker)
         hunter.collect_slots = Mock(return_value=[
             replace(DESTINATION, visit_start='2031-05-09T14:00:00', id='too-early'),
-            replace(DESTINATION, visit_start='2031-05-10T08:00:00', specialty_id='other'),
+            replace(DESTINATION, visit_start='2031-05-10T08:00:00', id='outside-hours'),
+            replace(DESTINATION, visit_start='2031-05-10T13:00:00', id='other', specialty_id='other'),
             replace(DESTINATION, visit_start='2031-05-12T14:00:00', id='later'),
             DESTINATION,
         ])
         self.assertFalse(hunter.scan_once(self.state, dry_run=True, persist=False))
-        self.booker.card.assert_called_once_with(TARGET, DESTINATION)
+        self.booker.card.assert_called_once_with(target, DESTINATION)
         self.client.patient_appointments.assert_not_called()
         self.client.appointment_change.assert_not_called()
         self.assertEqual([], self.saved)

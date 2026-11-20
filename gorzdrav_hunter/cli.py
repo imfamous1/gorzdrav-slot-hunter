@@ -99,7 +99,7 @@ def cmd_slots(args) -> int:
             room = f', каб. {slot.room}' if slot.room else ''
             when = slot.visit_start.replace('T', ' ')[:16]
             print(f' {i:3}{mark} {when}  {slot.doctor_name}{room} [{target["lpu_name"]}]')
-        print('\n✓ — подходит по датам. Ручная запись: ./hunt.sh book <номер>')
+        print('\n✓ — подходит по датам и времени. Ручная запись: ./hunt.sh book <номер>')
     else:
         print('Свободных талонов сейчас нет.')
     return 0
