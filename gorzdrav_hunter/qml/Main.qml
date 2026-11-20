@@ -9,18 +9,23 @@ ApplicationWindow {
     readonly property var viewData: bridge.view
     readonly property var update: bridge.update
     property int page: 0
+    onPageChanged: if (page === 3) bridge.refreshVisits()
     readonly property var sections: [
         { name: "Поиск", title: "Поиск талонов", key: "search", icon: "search" },
-        { name: "Пациенты", title: "Пациенты", key: "patient", icon: "patient" },
-        { name: "Telegram", title: "Telegram", key: "telegram", icon: "telegram" },
-        { name: "История", title: "История", key: "history", icon: "history" }
+        { name: "Пациенты", title: "Пациенты", key: "patient", icon: "user-round" },
+        { name: "Telegram", title: "Telegram", key: "telegram", icon: "send" },
+        { name: "Мои записи", title: "Мои записи", key: "visits", icon: "calendar-days" }
     ]
     readonly property var notice: bridge.notices[sections[page].key] || ({})
     readonly property bool searchActive: ["starting", "running", "retry", "stopping"].includes(win.viewData.phase)
+    readonly property bool checkingCard: win.viewData.phase === "checking_card"
+    readonly property bool attachmentDenied: win.page === 0 && win.viewData.phase === "attachment_denied"
+    readonly property bool searchWarning: win.viewData.phase === "retry" || win.checkingCard
+    readonly property bool searchError: win.viewData.phase === "failed" || win.attachmentDenied
     readonly property color phaseColor: win.viewData.phase === "running" || win.viewData.phase === "completed" ? T.accent
-                      : win.viewData.phase === "retry" ? T.warning : win.viewData.phase === "failed" ? T.danger : T.muted
+                      : win.searchWarning ? T.warning : win.searchError ? T.danger : T.muted
     readonly property color phaseBackground: win.viewData.phase === "running" || win.viewData.phase === "completed" ? T.accentSoft
-                           : win.viewData.phase === "retry" ? T.warningSoft : win.viewData.phase === "failed" ? T.dangerSoft : "#E8EFF3"
+                           : win.searchWarning ? T.warningSoft : win.searchError ? T.dangerSoft : T.neutralSoft
 
     title: "Талоны Горздрава"
     width: 1120
@@ -59,11 +64,14 @@ ApplicationWindow {
         AppButton {
             id: info
             compact: true
-            glyph: "info"
+            glyph: "circle-question-mark"
             label: "О режиме «" + option.title + "»"
             Layout.preferredHeight: 44
             Layout.preferredWidth: 44
             selected: help.opened
+            ToolTip.text: label
+            ToolTip.delay: 400
+            ToolTip.visible: !help.visible && (hovered || visualFocus)
             onClicked: help.opened ? help.close() : help.open()
             Popup {
                 id: help
@@ -103,39 +111,28 @@ ApplicationWindow {
                 anchors.bottomMargin: 23
                 spacing: 0
 
-                RowLayout {
+                ColumnLayout {
                     objectName: "navigationBrand"
-                    spacing: 10
+                    spacing: 3
                     Layout.fillWidth: true
+                    Layout.minimumHeight: 37
                     Layout.bottomMargin: 30
-                    Rectangle {
-                        Layout.preferredHeight: 37
-                        Layout.preferredWidth: 37
-                        radius: 11
-                        color: "#BFEADF"
-                        Icon { anchors.centerIn: parent; width: 22; height: 22; glyph: "cross"; tint: T.sidebar }
-                    }
-                    ColumnLayout {
+                    Text {
                         Layout.fillWidth: true
                         Layout.minimumWidth: 0
-                        spacing: 3
-                        Text {
-                            Layout.fillWidth: true
-                            Layout.minimumWidth: 0
-                            text: "Талоны Горздрава"
-                            color: T.surface
-                            font.pixelSize: 13
-                            font.weight: Font.Bold
-                            wrapMode: Text.WordWrap
-                        }
-                        Text {
-                            Layout.fillWidth: true
-                            Layout.minimumWidth: 0
-                            text: "Санкт-Петербург"
-                            color: T.railSoft
-                            font.pixelSize: 11
-                            wrapMode: Text.WordWrap
-                        }
+                        text: "Талоны Горздрава"
+                        color: T.surface
+                        font.pixelSize: 13
+                        font.weight: Font.Bold
+                        wrapMode: Text.WordWrap
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
+                        text: "Санкт-Петербург"
+                        color: T.railSoft
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
                     }
                 }
                 Repeater {
@@ -157,15 +154,15 @@ ApplicationWindow {
                         onClicked: win.page = index
                         background: Rectangle {
                             radius: 10
-                            color: nav.selected ? T.railActive : nav.hovered ? "#203944" : "transparent"
+                            color: nav.selected ? T.railActive : nav.hovered ? T.railHover : "transparent"
                             border.width: nav.visualFocus ? 2 : 0
-                            border.color: "#A9DBCC"
+                            border.color: T.railHighlight
                         }
                         contentItem: RowLayout {
                             spacing: 9
                             Icon {
                                 glyph: nav.modelData.icon
-                                tint: nav.selected ? "#A9DBCC" : T.railSoft
+                                tint: nav.selected ? T.railHighlight : T.railSoft
                                 Layout.preferredHeight: 18
                                 Layout.preferredWidth: 18
                             }
@@ -181,7 +178,7 @@ ApplicationWindow {
                                 Layout.preferredWidth: 5
                                 Layout.preferredHeight: 5
                                 radius: 3
-                                color: "#A9DBCC"
+                                color: T.railHighlight
                             }
                         }
                     }
@@ -191,9 +188,10 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 1
                     Layout.bottomMargin: 13
-                    color: "#34505A"
+                    color: T.railBorder
                 }
                 Text {
+                    objectName: "supportCaption"
                     Layout.fillWidth: true
                     text: "Создано с любовью к автоматизации.\nЖелаю всем здоровья!"
                     color: T.railText
@@ -202,11 +200,46 @@ ApplicationWindow {
                     wrapMode: Text.WordWrap
                 }
                 Button {
+                    id: supportButton
+                    objectName: "supportProject"
+                    Layout.fillWidth: true
+                    Layout.topMargin: 10
+                    implicitHeight: 34
+                    leftPadding: 8
+                    rightPadding: 8
+                    hoverEnabled: true
+                    text: "Поддержать проект"
+                    Accessible.description: "Откроется страница CloudTips в браузере"
+                    onClicked: Qt.openUrlExternally("https://pay.cloudtips.ru/p/433a83a0")
+                    background: Rectangle {
+                        radius: 8
+                        color: supportButton.hovered || supportButton.down ? T.railActive : T.railHover
+                        border.width: supportButton.visualFocus ? 2 : 0
+                        border.color: T.railHighlight
+                    }
+                    contentItem: RowLayout {
+                        spacing: 8
+                        Icon {
+                            glyph: "heart"
+                            tint: T.railHighlight
+                            Layout.preferredWidth: 16
+                            Layout.preferredHeight: 16
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: supportButton.text
+                            color: T.surface
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                        }
+                    }
+                }
+                Button {
                     id: updateButton
                     objectName: "updatesMenu"
                     readonly property bool busy: win.update.state === "checking" || win.update.state === "installing"
                     Layout.fillWidth: true
-                    Layout.topMargin: 10
+                    Layout.topMargin: 3
                     implicitHeight: 36
                     leftPadding: 8
                     rightPadding: 8
@@ -222,7 +255,7 @@ ApplicationWindow {
                         radius: 8
                         color: updateButton.hovered || updatePopup.visible || win.update.hasRelease ? T.railActive : "transparent"
                         border.width: updateButton.visualFocus ? 2 : 0
-                        border.color: "#A9DBCC"
+                        border.color: T.railHighlight
                     }
                     contentItem: RowLayout {
                         spacing: 6
@@ -235,13 +268,13 @@ ApplicationWindow {
                         Text {
                             visible: win.update.hasRelease
                             text: "Обновить"
-                            color: "#A9DBCC"
+                            color: T.railHighlight
                             font.pixelSize: 12
                             font.weight: Font.DemiBold
                         }
                         Icon {
-                            glyph: "update"
-                            tint: win.update.hasRelease ? "#A9DBCC" : T.railSoft
+                            glyph: win.update.hasRelease ? "download" : "refresh-cw"
+                            tint: win.update.hasRelease ? T.railHighlight : T.railSoft
                             Layout.preferredWidth: 16
                             Layout.preferredHeight: 16
                         }
@@ -316,6 +349,23 @@ ApplicationWindow {
                         font.weight: Font.Bold
                     }
                     Item { Layout.fillWidth: true }
+                    AppButton {
+                        objectName: "refreshVisits"
+                        visible: win.page === 3
+                        enabled: win.bridge.visits.available && !win.bridge.visits.busy
+                        compact: true
+                        glyph: "refresh-cw"
+                        text: win.bridge.visits.busy === "refresh" ? "Обновляем…" : "Обновить"
+                        onClicked: win.bridge.refreshVisits()
+                    }
+                    AppButton {
+                        objectName: "visitsPortal"
+                        visible: win.page === 3
+                        compact: true
+                        glyph: "external-link"
+                        text: "Открыть Горздрав"
+                        onClicked: win.bridge.openVisitsPortal()
+                    }
                     ColumnLayout {
                         visible: win.page === 0
                         Layout.fillWidth: false
@@ -347,7 +397,9 @@ ApplicationWindow {
                             }
                         }
                         SecondaryText {
+                            objectName: "searchPoll"
                             Layout.alignment: Qt.AlignRight
+                            visible: Boolean(win.viewData.lastPoll) || !win.attachmentDenied
                             text: win.viewData.lastPoll ? "Последняя проверка в " + win.viewData.lastPoll : "Проверок пока нет"
                             font.pixelSize: 12
                         }
@@ -413,7 +465,7 @@ ApplicationWindow {
                     AppButton {
                         objectName: "newSearch"
                         compact: true
-                        glyph: "cross"
+                        glyph: "list-plus"
                         text: "Новый поиск"
                         onClicked: win.bridge.newSearch()
                     }
@@ -429,12 +481,12 @@ ApplicationWindow {
                     ScrollBar.vertical: ScrollBar {
                         policy: ScrollBar.AsNeeded
                         width: 5
-                        contentItem: Rectangle { radius: 3; color: "#AABEC9" }
+                        contentItem: Rectangle { radius: 3; color: T.scrollThumb }
                     }
                     Loader {
                         id: pageLoader
                         width: workScroll.availableWidth
-                        sourceComponent: [searchPage, patientPage, telegramPage, historyPage][win.page]
+                        sourceComponent: [searchPage, patientPage, telegramPage, visitsPage][win.page]
                         onSourceComponentChanged: workScroll.contentItem.contentY = 0
                     }
                 }
@@ -444,21 +496,52 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     color: "transparent"
                     implicitHeight: footerContent.implicitHeight
-                    RowLayout {
+                    GridLayout {
                         id: footerContent
                         anchors.fill: parent
-                        spacing: 12
+                        columns: 3
+                        columnSpacing: 12
+                        rowSpacing: 8
+                        readonly property bool stacked: win.page === 0 && searchFeedback.text.length > 0 && width < 730
                         SecondaryText {
+                            id: searchFeedback
+                            objectName: "searchFeedback"
+                            Layout.row: 0
+                            Layout.column: 0
+                            Layout.columnSpan: footerContent.stacked ? 3 : 1
+                            Layout.minimumWidth: 0
                             Layout.fillWidth: true
-                            color: win.notice.error ? T.danger : T.muted
-                            text: win.notice.text || ""
+                            Layout.alignment: Qt.AlignVCenter
+                            color: win.notice.error || win.attachmentDenied ||
+                                   (win.page === 0 && win.viewData.cardError) ? T.danger : T.muted
+                            textFormat: Text.PlainText
+                            text: win.notice.text || (win.page === 0 &&
+                                (win.viewData.cardError || (win.attachmentDenied &&
+                                  "Горздрав отклонил запись из-за данных о прикреплении по ОМС. При необходимости уточни их в регистратуре."))) || ""
+                        }
+                        Item {
+                            visible: footerContent.stacked
+                            Layout.row: 1
+                            Layout.column: 0
+                            Layout.fillWidth: true
+                        }
+                        AppButton {
+                            objectName: "attachmentCheck"
+                            visible: win.page === 0
+                            Layout.row: footerContent.stacked ? 1 : 0
+                            Layout.column: 1
+                            glyph: "external-link"
+                            text: "Проверить прикрепление"
+                            onClicked: win.bridge.openAttachmentCheck()
                         }
                         AppButton {
                             objectName: "searchAction"
                             visible: win.page === 0
-                            enabled: win.viewData.phase !== "stopping"
+                            Layout.row: footerContent.stacked ? 1 : 0
+                            Layout.column: 2
+                            enabled: win.viewData.phase !== "stopping" && !win.checkingCard
                             variant: win.searchActive ? "danger" : "primary"
-                            glyph: win.searchActive ? "stop" : "play"
+                            glyph: win.searchActive ? "search-x" : "search"
                             Layout.preferredWidth: 188
                             text: win.searchActive ? "Остановить поиск" : "Запустить поиск"
                             onClicked: win.bridge.searchAction()
@@ -768,8 +851,8 @@ ApplicationWindow {
         ColumnLayout {
             spacing: 12
             Card {
+                objectName: "patientCard"
                 Layout.fillWidth: true
-                Layout.maximumWidth: 738
                 contentItem: ColumnLayout {
                     spacing: 15
                     RowLayout {
@@ -784,7 +867,7 @@ ApplicationWindow {
                         }
                         AppButton {
                             Layout.alignment: Qt.AlignBottom
-                            glyph: "cross"
+                            glyph: "user-round-plus"
                             text: "Добавить пациента"
                             enabled: win.viewData.canAddPatient
                             onClicked: { win.bridge.selectPatient(""); surname.focusInput() }
@@ -852,8 +935,8 @@ ApplicationWindow {
         id: telegramPage
         ColumnLayout {
             Card {
+                objectName: "telegramCard"
                 Layout.fillWidth: true
-                Layout.maximumWidth: 738
                 contentItem: ColumnLayout {
                     spacing: 15
                     Switch {
@@ -893,7 +976,7 @@ ApplicationWindow {
                     RowLayout {
                         Layout.fillWidth: true
                         AppButton {
-                            glyph: "telegram"
+                            glyph: "send-horizontal"
                             text: win.viewData.telegram.busy ? "Отправляем…" : "Отправить тест"
                             enabled: win.viewData.telegram.enabled && !win.viewData.telegram.busy
                             onClicked: win.bridge.testTelegram()
@@ -907,35 +990,76 @@ ApplicationWindow {
     }
 
     Component {
-        id: historyPage
+        id: visitsPage
         ColumnLayout {
+            id: visitsList
+            readonly property var visits: win.bridge.visits
             spacing: 10
+            SecondaryText {
+                visible: visitsList.visits.rows.length > 0
+                Layout.fillWidth: true
+                text: "Предстоящие приёмы · время Санкт-Петербурга"
+            }
             Card {
                 Layout.fillWidth: true
-                visible: win.viewData.events.length === 0
-                contentItem: SecondaryText { text: "Событий пока нет." }
+                visible: visitsList.visits.rows.length === 0
+                contentItem: ColumnLayout {
+                    spacing: 8
+                    Heading {
+                        font.pixelSize: 16
+                        text: win.bridge.visits.busy === "refresh" ? "Загружаем записи…"
+                            : win.notice.error ? "Талоны недоступны" : "Предстоящих записей нет"
+                    }
+                    SecondaryText {
+                        visible: !win.bridge.visits.busy && !win.notice.error
+                        Layout.fillWidth: true
+                        text: win.bridge.visits.available
+                            ? "Талоны в других поликлиниках можно проверить на Горздраве."
+                            : "Здесь появятся талоны из поликлиник, в которых ты запускал поиск."
+                    }
+                }
             }
             Repeater {
-                model: win.viewData.events
-                delegate: Card {
-                    id: eventCard
+                model: visitsList.visits.rows
+                delegate: VisitCard {
                     required property var modelData
                     Layout.fillWidth: true
-                    padding: 16
-                    contentItem: ColumnLayout {
-                        spacing: 7
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Heading {
-                                Layout.fillWidth: true
-                                text: eventCard.modelData.label
-                                font.pixelSize: 14
-                                color: eventCard.modelData.kind === "ERR" ? T.danger : T.ink
-                            }
-                            SecondaryText { text: eventCard.modelData.time; font.pixelSize: 12 }
-                        }
-                        SecondaryText { Layout.fillWidth: true; text: eventCard.modelData.text; textFormat: Text.PlainText }
-                    }
+                    visit: modelData
+                    busy: win.bridge.visits.busy
+                    onCalendarRequested: win.bridge.addVisitToCalendar(visit.id)
+                    onCancellationRequested: win.bridge.requestVisitCancellation(visit.id)
+                }
+            }
+        }
+    }
+
+    Popup {
+        id: cancelVisit
+        objectName: "confirmVisitCancellation"
+        property string summary
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: 440
+        modal: true
+        focus: true
+        padding: 22
+        closePolicy: Popup.CloseOnEscape
+        onOpened: keepVisit.forceActiveFocus()
+        onClosed: win.bridge.confirmVisitCancellation(false)
+        background: Rectangle { radius: 16; color: T.surface; border.color: T.border }
+        contentItem: ColumnLayout {
+            spacing: 14
+            Heading { text: "Отменить приём?" }
+            SecondaryText { Layout.fillWidth: true; text: cancelVisit.summary; textFormat: Text.PlainText }
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                AppButton { id: keepVisit; text: "Оставить запись"; onClicked: cancelVisit.close() }
+                AppButton {
+                    objectName: "acceptVisitCancellation"
+                    text: "Отменить приём"
+                    variant: "danger"
+                    onClicked: { win.bridge.confirmVisitCancellation(true); cancelVisit.close() }
                 }
             }
         }
@@ -979,6 +1103,10 @@ ApplicationWindow {
             confirm.headline = title
             confirm.summary = summary
             confirm.open()
+        }
+        function onVisitCancellationRequested(summary) {
+            cancelVisit.summary = summary
+            cancelVisit.open()
         }
     }
 }

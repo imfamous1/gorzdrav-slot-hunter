@@ -42,7 +42,6 @@ CheckBox {
             visible: control.checked
             glyph: "check"
             tint: control.enabled ? T.surface : T.muted
-            Accessible.ignored: true
         }
     }
 }

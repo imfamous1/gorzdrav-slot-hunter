@@ -12,7 +12,7 @@ import logging
 import time
 from datetime import datetime
 
-from .client import GorzdravClient, GorzdravError, Slot, portal_link
+from .client import AttachmentDenied, GorzdravClient, GorzdravError, Slot, portal_link
 from .config import birthdate_iso, profile_is_ready
 
 log = logging.getLogger(__name__)
@@ -197,6 +197,8 @@ class Booker:
             try:
                 self.client.appointment_create(body)
                 return self._verify_after_create(target, slot, body)
+            except AttachmentDenied:
+                raise
             except GorzdravError as e:
                 if e.code == 615 and attempts < max_attempts:
                     log.warning('errorCode 615 (пиковая ошибка портала), '

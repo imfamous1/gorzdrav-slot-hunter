@@ -13,12 +13,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from .booker import Booker
-from .client import GorzdravClient, GorzdravError
+from .client import AttachmentDenied, GorzdravClient, GorzdravError
 from .config import (
     CONFIG_PATH, LOG_DIR, ROOT, _read_json, _write_json, load_config,
     load_profile, load_state, normalize_target, save_profile, save_state,
 )
-from .desktop_plan import apply_plan, read_plan, task_states, transfer_key
+from .desktop_plan import PATIENT_FIELDS, apply_plan, job_scope, read_plan, task_states, transfer_key
 from .hunter import Hunter
 from .notify import Notifier
 from .paths import RESOURCES
@@ -33,6 +33,7 @@ CONTROL_LOCK = ROOT / '.cache' / 'desktop.lock'
 WORKER_LOCK = ROOT / '.cache' / 'hunter.lock'
 ACTIVE_PHASES = {'starting', 'running', 'stopping'}
 FINISHED_JOBS = {'completed', 'closed'}
+TERMINAL_JOBS = FINISHED_JOBS | {'attachment_denied'}
 
 
 def read_status() -> dict:
@@ -67,7 +68,9 @@ def job_phase(status, job, state):
         state = {}
     phase = state.get('phase')
     run = job.get('run', {})
-    if phase in FINISHED_JOBS:
+    if phase in FINISHED_JOBS or (
+        phase == 'attachment_denied' and state.get('run_token') == run.get('token')
+    ):
         return phase
     current = status['phase']
     if status.get('per_job'):
@@ -112,7 +115,7 @@ def stop_job(job_id, run_id, *, token=None):
         _write_json(CONFIG_PATH, apply_plan(raw, plan))
 
 
-def start_desktop_job(job_id, job, profile):
+def start_desktop_job(job_id, job, profile, *, checked_card=None):
     """Сохранить и запустить поисковую задачу выбранной вкладки."""
     with _control_update():
         status = read_status()
@@ -136,7 +139,16 @@ def start_desktop_job(job_id, job, profile):
         if key and any(other_id != job_id and transfer_key(other) == key
                        for other_id, other in plan['jobs'].items()):
             raise ValueError('Для этого приёма уже сохранён автоперенос.')
-        normalize_target(job['target'], config)
+        target = normalize_target(job['target'], config)
+        if checked_card is not None:
+            if any(other_id != job_id and job_scope(other) == job_scope(job)
+                   for other_id, other in plan['jobs'].items()):
+                raise ValueError('Такой поиск уже сохранён.')
+            checked_profile, card_id = checked_card
+            patient = plan['patients'].get(job.get('patient'))
+            if patient is None or any(patient.get(field) != checked_profile.get(field) for field in PATIENT_FIELDS):
+                raise ValueError('Данные пациента изменились. Запусти проверку ещё раз.')
+            patient['patient_ids'] = {**(patient.get('patient_ids') or {}), str(target['lpu_id']): card_id}
         if status['phase'] == 'stopping':
             raise ValueError('Фоновый поиск завершается. Попробуй ещё раз.')
         launch = status['phase'] not in ACTIVE_PHASES
@@ -320,7 +332,10 @@ class DesktopSearchGroup(Hunter):
             self.tokens[job_id] = token
             if self.run_id:
                 job_state = self.states[job_id]
-                if job_state.get('phase') not in FINISHED_JOBS:
+                phase = job_state.get('phase')
+                if phase not in TERMINAL_JOBS or (
+                    phase == 'attachment_denied' and job_state.get('run_token') != token
+                ):
                     job_state.update(run_token=token, phase='starting')
             patient_id = job.get('patient')
             profile = dict(profiles.get(patient_id, {}))
@@ -369,7 +384,7 @@ class DesktopSearchGroup(Hunter):
             if run.get('worker') != self.run_id or not run.get('stop'):
                 continue
             stats = self.states.get(key, {})
-            if ((stats.get('run_token') == run['token'] and stats.get('phase') == 'stopped')
+            if ((stats.get('run_token') == run['token'] and stats.get('phase') in ('stopped', 'attachment_denied'))
                     or stats.get('phase') in FINISHED_JOBS):
                 continue
             task_states(self.state, {**plan, 'jobs': {key: job}})[key].update(
@@ -384,7 +399,7 @@ class DesktopSearchGroup(Hunter):
             save_state(self.state)
 
     def _done(self):
-        return all(self.states[key].get('phase') in FINISHED_JOBS for key, _ in self.jobs)
+        return all(self.states[key].get('phase') in TERMINAL_JOBS for key, _ in self.jobs)
 
     def settle_jobs(self, *, persist=True):
         """Принять остановки между опросами, сохранив интервал запросов к порталу."""
@@ -425,7 +440,7 @@ class DesktopSearchGroup(Hunter):
             job_state = self.states[job_id]
             if self.should_stop():
                 return False
-            if job_state.get('phase') in FINISHED_JOBS:
+            if job_state.get('phase') in TERMINAL_JOBS:
                 continue
             if wait:
                 time.sleep(max(1.0, float(self.cfg['http']['sleep_between_requests_sec'])))
@@ -438,6 +453,10 @@ class DesktopSearchGroup(Hunter):
                 before = len(job_state['booked'])
                 stopped = hunter.scan_once(job_state, persist=persist, notify=notify, dry_run=dry_run,
                                            interactive=interactive)
+            except AttachmentDenied as error:
+                job_state['phase'] = 'attachment_denied'
+                hunter.notifier.error(error.friendly + '. Проверь прикрепление по ОМС.')
+                continue
             except GorzdravError as error:
                 last_error = error
                 job_state['phase'] = 'retry'

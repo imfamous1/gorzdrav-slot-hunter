@@ -3,7 +3,7 @@ from dataclasses import replace
 import unittest
 from unittest.mock import Mock, patch
 
-from gorzdrav_hunter.client import GorzdravClient, GorzdravError, Slot
+from gorzdrav_hunter.client import AttachmentDenied, GorzdravClient, GorzdravError, Slot
 from gorzdrav_hunter.config import normalize_target
 from gorzdrav_hunter.hunter import Hunter
 from gorzdrav_hunter.reschedule import Rescheduler
@@ -132,3 +132,12 @@ class RescheduleTests(unittest.TestCase):
             'previousAppointmentId': SOURCE_ID, 'lpuId': '99',
             'patientId': 'fixture-patient', 'referralId': None,
         })
+
+    def test_attachment_refusal_keeps_the_original_visit(self):
+        self.client.patient_appointments.return_value = [self.old]
+        self.client.appointment_change.side_effect = AttachmentDenied(1, 'Пациент не прикреплён')
+        with self.assertRaises(AttachmentDenied):
+            self.rescheduler.submit(self.state, TARGET, DESTINATION, dry_run=False)
+        self.assertNotIn(SOURCE_ID, self.saved[-1]['reschedules'])
+        self.assertEqual([], self.state['booked'])
+        self.client.appointment_change.assert_called_once()

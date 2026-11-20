@@ -5,7 +5,7 @@ import logging
 from dataclasses import asdict
 from datetime import datetime
 
-from .client import GorzdravError, Slot
+from .client import AttachmentDenied, GorzdravError, Slot
 from .config import record_booking, save_state
 
 log = logging.getLogger(__name__)
@@ -80,6 +80,10 @@ class Rescheduler:
                 lpu_id=target['lpu_id'], patient_id=patient_id,
                 previous_id=source_id, slot_id=slot.id,
             )
+        except AttachmentDenied:
+            del state['reschedules'][source_id]
+            (self.persist_state or save_state)(state)
+            raise
         except GorzdravError as error:
             log.warning('Горздрав вернул код %s при переносе. Проверяю записи.', error.code)
             if error.code in (39, 645):

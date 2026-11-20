@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 FIRST_JOB = 'original'
+PATIENT_FIELDS = ('last_name', 'first_name', 'middle_name', 'birthdate')
 
 
 def read_plan(config: dict, profile: dict | None) -> dict:
@@ -46,6 +47,16 @@ def transfer_key(job: dict) -> tuple | None:
     if source:
         return str(target['lpu_id']), job.get('patient'), source['appointment_id']
     return None
+
+
+def job_scope(job: dict) -> tuple:
+    target = job['target']
+    return (
+        job.get('patient'), str(target['lpu_id']), target.get('reschedule_from'),
+        tuple(target.get('specialty_ids', [])), tuple(target.get('doctor_ids', [])),
+        target['book_date_from'], target.get('book_date_to'),
+        target.get('book_time_from') or None, target.get('book_time_to') or None, target.get('auto_book'),
+    )
 
 
 def task_states(state: dict, plan: dict) -> dict:

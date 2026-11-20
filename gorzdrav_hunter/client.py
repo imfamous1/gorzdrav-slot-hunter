@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import socket
 import sys
 import time
@@ -26,6 +27,13 @@ log = logging.getLogger(__name__)
 ORIGIN = 'https://gorzdrav.spb.ru'
 BASE = f'{ORIGIN}/_api/api/v2'
 PORTAL = f'{ORIGIN}/service-free-schedule'
+ATTACHMENT_CHECK_URL = f'{ORIGIN}/service-oms-check'
+ATTACHMENT_REFUSAL = re.compile(
+    r'\b(?:не прикреплен[аы]?|не имеет прикрепления|нет прикрепления|'
+    r'отсутств(?:ует|ие) прикрепления|прикрепление отсутствует|'
+    r'(?:требуется|необходимо) прикрепление|'
+    r'только (?:по прикреплению|при наличии прикрепления))\b'
+)
 
 # коды, при которых операция временно недоступна и ретрай уместен
 TRANSIENT_CODES = {602, 603, 615, 616, 660}
@@ -66,6 +74,14 @@ class GorzdravError(Exception):
     @property
     def friendly(self) -> str:
         return FRIENDLY.get(self.code, self.message or f'ошибка портала {self.code}')
+
+
+class AttachmentDenied(GorzdravError):
+    """Горздрав отклонил запись или перенос со ссылкой на прикрепление."""
+
+    @property
+    def friendly(self) -> str:
+        return 'Горздрав отклонил запись из-за данных о прикреплении по ОМС'
 
 
 @dataclass
@@ -263,20 +279,25 @@ class GorzdravClient:
             {'lpuId': str(lpu_id), 'patientId': str(patient_id)},
             quote_via=urllib.parse.quote, safe='',
         )
-        return self._call('GET', '/appointments', query=query) or []
+        result = self._call('GET', '/appointments', query=query)
+        if result is None:
+            return []
+        if not isinstance(result, list) or any(not isinstance(record, dict) for record in result):
+            raise GorzdravError(-1, 'Не удалось прочитать список талонов.')
+        return result
 
     def appointment_create(self, body: dict) -> None:
         """Создать запись. Успех = success:true с пустым result (не финал!)."""
-        self._call('POST', '/appointment/create', json_body=body)
+        self._write_appointment('/appointment/create', body)
 
-    def appointment_cancel(self, body: dict) -> None:
-        self._call('POST', '/appointment/cancel', json_body=body)
+    def appointment_cancel(self, body: dict) -> bool:
+        return self._call('POST', '/appointment/cancel', json_body=body) is True
 
     def appointment_change(
         self, *, lpu_id: int, patient_id: str, previous_id: str, slot_id: str,
     ) -> None:
         """Штатный перенос с портала, обе записи передаются в одном запросе."""
-        self._call('POST', '/appointment/change', json_body={
+        self._write_appointment('/appointment/change', {
             'esiaId': None,
             'appointmentId': slot_id,
             'previousAppointmentId': previous_id,
@@ -284,6 +305,16 @@ class GorzdravClient:
             'patientId': patient_id,
             'referralId': None,
         })
+
+    def _write_appointment(self, path: str, body: dict) -> None:
+        try:
+            self._call('POST', path, json_body=body)
+        except GorzdravError as error:
+            if error.code > 0:
+                message = ' '.join(str(error.message).casefold().replace('ё', 'е').split())
+                if error.code == 8 or ATTACHMENT_REFUSAL.search(message):
+                    raise AttachmentDenied(error.code, error.message, error.request_id) from error
+            raise
 
     def patient_update_phone(self, lpu_id: int, patient_id: str, phone10: str) -> None:
         body = {

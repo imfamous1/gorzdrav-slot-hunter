@@ -43,7 +43,7 @@ Button {
         radius: 11
         antialiasing: true
         color: control.selected ? T.accentSoft
-               : !control.enabled ? T.canvas
+               : !control.enabled ? T.input
                : control.variant === "primary" ? (control.hovered || control.down ? T.accentHover : T.accent)
                : control.variant === "danger" ? (control.hovered || control.down ? T.dangerHover : T.danger)
                : control.down ? T.accentSoft

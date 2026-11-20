@@ -12,35 +12,41 @@ import threading
 from uuid import uuid4
 
 from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow
 from PySide6.QtQuickControls2 import QQuickStyle
 
 from . import __version__
-from .client import GorzdravClient, GorzdravError
-from .config import CONFIG_PATH, _read_json, _write_json, format_time_window, load_profile, load_state, parse_book_time
-from .desktop_catalog import ANY_DOCTOR, CATALOG, fetch_appointments, fetch_catalog, match_choices, visit_label
+from .client import ATTACHMENT_CHECK_URL, GorzdravClient, GorzdravError
+from .config import (
+    CONFIG_PATH, ROOT, _read_json, _write_json, format_time_window, load_profile, load_state,
+    parse_book_time, profile_is_ready,
+)
+from .desktop_catalog import (
+    ANY_DOCTOR, CATALOG, clinic_patient_id, fetch_appointments, fetch_catalog, match_choices, visit_label,
+)
+from .desktop_icons import LucideIcons
 from .desktop_install import finish_install, start_installer
-from .desktop_plan import apply_plan, patient_name, read_plan, task_states, task_title, transfer_key
+from .desktop_plan import PATIENT_FIELDS, apply_plan, job_scope, patient_name, read_plan, task_states, task_title, transfer_key
 from .desktop_update import RELEASES, UpdateError, check_release, prepare_update
+from .desktop_visits import CANCEL_URL, PETERSBURG, VISITS_URL, calendar_event, cancel_visit, fetch_visits, visit_scopes
 from .desktop_worker import (
-    ACTIVE_PHASES, CONTROL_LOCK, EVENTS, append_live_plan, job_phase, read_status, start_desktop_job, stop_job,
+    ACTIVE_PHASES, CONTROL_LOCK, append_live_plan, job_phase, read_status, start_desktop_job, stop_job,
 )
 from .notify import Notifier
 from .process_lock import process_lock
 from .tls import build_bundle
 
 
-JOB_ACTIVE = ACTIVE_PHASES | {'retry'}
+JOB_ACTIVE = ACTIVE_PHASES | {'retry', 'checking_card'}
 PHASES = {
     'idle': 'Поиск выключен', 'starting': 'Запускается', 'running': 'Поиск идёт',
+    'checking_card': 'Проверяем медкарту', 'attachment_denied': 'Запись отклонена',
     'stopping': 'Останавливается', 'stopped': 'Поиск остановлен', 'completed': 'Приём подтверждён',
     'closed': 'Поиск завершён', 'retry': 'Повторим опрос', 'failed': 'Ошибка запуска',
     'interrupted': 'Поиск прервался', 'draft': 'Черновик',
 }
-EVENT_LABELS = {'OK': 'Подтверждение', 'WARN': 'Предупреждение', 'ERR': 'Ошибка', 'SLOT': 'Свободный талон'}
-PATIENT_FIELDS = ('last_name', 'first_name', 'middle_name', 'birthdate')
 MAX_PATIENT_AGE = 120
 FIELD_LABELS = {'district': 'район', 'clinic': 'поликлинику', 'specialty': 'специальность'}
 
@@ -63,16 +69,6 @@ def _birthdate_text(value):
 def _person_key(profile):
     names = tuple((profile.get(key) or '').strip().casefold() for key in PATIENT_FIELDS[:-1])
     return (*names, _birthdate_text((profile.get('birthdate') or '').strip()))
-
-
-def _job_scope(job):
-    target = job['target']
-    return (
-        job.get('patient'), str(target['lpu_id']), target.get('reschedule_from'),
-        tuple(target.get('specialty_ids', [])), tuple(target.get('doctor_ids', [])),
-        target['book_date_from'], target.get('book_date_to'),
-        target.get('book_time_from') or None, target.get('book_time_to') or None, target.get('auto_book'),
-    )
 
 
 class FormError(ValueError):
@@ -100,6 +96,8 @@ class SearchForm:
     source_generation: int = 0
     source_busy: bool = False
     source_note: str = ''
+    card_checking: bool = False
+    card_error: str = ''
 
     @classmethod
     def from_job(cls, job, default_patient):
@@ -214,6 +212,7 @@ class DesktopApp(QObject):
     updateChanged = Signal()
     focusRequested = Signal(str)
     confirmationRequested = Signal(str, str)
+    visitCancellationRequested = Signal(str)
 
     def __init__(self, *, load_catalog=True):
         super().__init__()
@@ -223,7 +222,11 @@ class DesktopApp(QObject):
         self.plan = read_plan(self.config, self.legacy_profile)
         self.runtime = read_status()
         self.states = task_states(load_state(), self.plan)
-        self.events = _read_json(EVENTS, default=[])
+        self._visits = {}
+        self._visits_failed = set()
+        self._visits_unverified = set()
+        self._visits_busy = ''
+        self._pending_visit = None
         self.tasks = SimpleQueue()
         self.forms = {}
         self.drafts = []
@@ -252,14 +255,25 @@ class DesktopApp(QObject):
         return self.forms[self.selected]
 
     def _phase(self, key):
-        return ('draft' if key in self.drafts else
-                job_phase(self.runtime, self.plan['jobs'].get(key), self.states.get(key, {})))
+        form = self.forms.get(key)
+        if form and form.card_checking:
+            return 'checking_card'
+        if key in self.drafts:
+            return 'draft'
+        job = self.plan['jobs'].get(key)
+        phase = job_phase(self.runtime, job, self.states.get(key, {}))
+        if phase == 'attachment_denied' and form and (
+            form.patient != job.get('patient')
+            or str(form.choices.get('clinic', {}).get('id')) != str(job['target']['lpu_id'])
+        ):
+            return 'stopped'
+        return phase
 
     def _reopen_jobs(self):
         reopened = set()
         for key in self.plan['jobs']:
             transfers = self.states.get(key, {}).get('reschedules', {})
-            if self._phase(key) in ('starting', 'running', 'retry') or any(
+            if self._phase(key) in ('starting', 'running', 'retry', 'attachment_denied') or any(
                 transfer.get('status') == 'submitted' for transfer in transfers.values()
             ):
                 reopened.add(key)
@@ -281,6 +295,7 @@ class DesktopApp(QObject):
         return {
             'selected': self.selected, 'tabs': tabs, 'phase': phase, 'status': PHASES[phase],
             'lastPoll': stamp[11:16] if stamp else '',
+            'cardError': form.card_error,
             'editable': phase not in JOB_ACTIVE, 'mode': form.mode, 'patient': form.patient,
             'patientLabel': patient_name(patients.get(form.patient, {})), 'patients': options,
             'start': form.start, 'end': form.end, 'period': form.period,
@@ -298,9 +313,6 @@ class DesktopApp(QObject):
                 'chat_id': str(self.telegram_form.get('chat_id') or ''),
                 'busy': self.telegram_busy,
             },
-            'events': [{'time': event['time'].replace('T', ' ')[:16], 'kind': event['kind'],
-                        'label': EVENT_LABELS.get(event['kind'], 'Событие'), 'text': event['text']}
-                       for event in reversed(self.events)],
         }
 
     @Property('QVariantMap', notify=noticeChanged)
@@ -316,9 +328,15 @@ class DesktopApp(QObject):
             self.focusRequested.emit(field)
 
     def _apply_config(self, config):
+        previous = self.plan['patients']
         self.config = config
         self.plan = read_plan(config, self.legacy_profile)
         self.drafts = [key for key in self.drafts if key not in self.plan['jobs']]
+        for scope in list(self._visits):
+            key = scope[0]
+            if _person_key(previous.get(key, {})) != _person_key(self.plan['patients'].get(key, {})):
+                del self._visits[scope]
+                self._visits_failed.discard(scope)
 
     @Slot()
     def _refresh(self):
@@ -328,13 +346,12 @@ class DesktopApp(QObject):
         config = _read_json(CONFIG_PATH, default={})
         status = read_status()
         states = task_states(load_state(), read_plan(config, self.legacy_profile))
-        events = _read_json(EVENTS, default=[])
-        if (config, status, states, events) == (self.config, self.runtime, self.states, self.events):
+        if (config, status, states) == (self.config, self.runtime, self.states):
             return
         was_active = self._phase(self.selected) in JOB_ACTIVE
         if config != self.config:
             self._apply_config(config)
-        self.runtime, self.states, self.events = status, states, events
+        self.runtime, self.states = status, states
         self.open_jobs.update(self._reopen_jobs())
         self.changed.emit()
         if was_active and self._phase(self.selected) not in JOB_ACTIVE and self.load_catalog:
@@ -353,6 +370,158 @@ class DesktopApp(QObject):
     def _client(self):
         return GorzdravClient(verify=build_bundle(), timeout=15,
                               direct_interface=self.config.get('http', {}).get('direct_interface'))
+
+    def _upcoming_visits(self, scopes):
+        now = datetime.now(PETERSBURG)
+        visits = {visit.key: visit for scope, rows in self._visits.items() if scope in scopes
+                  for visit in rows if visit.start > now}
+        return sorted(visits.values(), key=lambda item: (item.start, item.patient, item.clinic))
+
+    @Property('QVariantMap', notify=changed)
+    def visits(self):
+        scopes = visit_scopes(self.plan)
+        return {
+            'available': bool(scopes), 'busy': self._visits_busy,
+            'rows': [{
+                'id': visit.key, 'date': visit.start.strftime('%d.%m.%Y'), 'time': visit.start.strftime('%H:%M'),
+                'title': visit.title, 'doctor': visit.doctor if visit.doctor != visit.title else '',
+                'patient': visit.patient, 'clinic': visit.clinic, 'place': visit.place,
+                'portalCancel': visit.referral or visit.scope in self._visits_failed or
+                visit.key in self._visits_unverified,
+            } for visit in self._upcoming_visits(scopes)],
+        }
+
+    @Slot()
+    def refreshVisits(self):
+        scopes = visit_scopes(self.plan)
+        if not scopes or self._visits_busy or self._pending_visit is not None:
+            return
+        self._visits_busy = 'refresh'
+        self._notice('visits')
+        self.changed.emit()
+
+        def done(results, error):
+            self._visits_busy = ''
+            current = visit_scopes(self.plan)
+            for scope, (profile, _) in scopes.items():
+                if scope not in current or _person_key(profile) != _person_key(current[scope][0]):
+                    continue
+                rows = None if error else results[scope]
+                if rows is None:
+                    self._visits_failed.add(scope)
+                else:
+                    self._visits_unverified.difference_update(visit.key for visit in self._visits.get(scope, []))
+                    self._visits[scope] = rows
+                    self._visits_failed.discard(scope)
+            failed = self._visits_failed.intersection(current)
+            if failed:
+                message = ('Не удалось обновить часть талонов. Попробуй ещё раз или проверь на Горздраве.'
+                           if failed != current.keys() else
+                           'Не удалось загрузить талоны. Попробуй ещё раз или проверь на Горздраве.')
+                self._notice('visits', message, error=True)
+            self.changed.emit()
+
+        self._background(lambda: fetch_visits(self._client(), scopes), done)
+
+    @Slot()
+    def openVisitsPortal(self):
+        self._open_visits_url(VISITS_URL)
+
+    @Slot()
+    def openCancellationPortal(self):
+        self._open_visits_url(CANCEL_URL)
+
+    def _open_visits_url(self, url):
+        if not QDesktopServices.openUrl(QUrl(url)):
+            self._notice('visits', f'Не удалось открыть браузер. Адрес страницы — {url}', error=True)
+
+    def _visit(self, key):
+        return next((visit for visit in self._upcoming_visits(visit_scopes(self.plan)) if visit.key == key), None)
+
+    @Slot(str)
+    def addVisitToCalendar(self, key):
+        visit = self._visit(key)
+        if visit is None:
+            return
+        folder = ROOT / '.cache' / 'calendar'
+        path = folder / f'Приём-{key[:16]}.ics'
+        try:
+            folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+            path.write_bytes(calendar_event(visit))
+        except OSError:
+            self._notice('visits', 'Не удалось сохранить событие календаря.', error=True)
+            return
+        if QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            self._notice('visits', 'Подтверди добавление события в календаре.')
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+            self._notice('visits', f'Открой или импортируй файл «{path.name}» в календаре.', error=True)
+
+    @Slot(str)
+    def requestVisitCancellation(self, key):
+        if self._visits_busy or self._pending_visit is not None:
+            return
+        visit = self._visit(key)
+        if visit is None:
+            return
+        if visit.referral or visit.scope in self._visits_failed or key in self._visits_unverified:
+            self.openCancellationPortal()
+            return
+        self._pending_visit = visit
+        when = visit.start.strftime('%d.%m.%Y в %H:%M')
+        self.visitCancellationRequested.emit('\n'.join(filter(None, (
+            f'{when} · {visit.title}', visit.doctor if visit.doctor != visit.title else '',
+            visit.clinic, visit.place, visit.patient,
+        ))))
+
+    @Slot(bool)
+    def confirmVisitCancellation(self, accepted):
+        visit, self._pending_visit = self._pending_visit, None
+        if not accepted or visit is None or self._visits_busy or self._visit(visit.key) != visit:
+            return
+        profile = self.plan['patients'][visit.scope[0]]
+        self._visits_busy = visit.key
+        self._notice('visits', 'Проверяем талон и отправляем отмену…')
+        self.changed.emit()
+
+        def operation():
+            with process_lock(ROOT / '.cache' / 'visit-cancel.lock'):
+                plan = read_plan(_read_json(CONFIG_PATH, default={}), load_profile())
+                current_profile = plan['patients'].get(visit.scope[0], {})
+                if _person_key(profile) != _person_key(current_profile):
+                    return 'profile_changed'
+                status = read_status()
+                states = task_states(load_state(), plan)
+                for key, job in plan['jobs'].items():
+                    if transfer_key(job) != (visit.scope[1], visit.scope[0], visit.appointment_id):
+                        continue
+                    state = states[key]
+                    if (job_phase(status, job, state) in JOB_ACTIVE or
+                            state['reschedules'].get(visit.appointment_id, {}).get('status') == 'submitted'):
+                        return 'transfer'
+                return cancel_visit(self._client(), visit, current_profile)
+
+        def done(result, error):
+            self._visits_busy = ''
+            if error:
+                message = ('Отмена уже проверяется в другом окне.' if isinstance(error, BlockingIOError) else
+                           'Не удалось проверить талон. Попробуй ещё раз или отмени на Горздраве.')
+            elif result in ('cancelled', 'absent'):
+                self._visits[visit.scope] = [row for row in self._visits.get(visit.scope, []) if row.key != visit.key]
+                message = ('Горздрав подтвердил отмену приёма.' if result == 'cancelled' else
+                           'Этот талон больше не отображается на Горздраве.')
+            elif result == 'transfer':
+                message = 'Для этого талона идёт автоперенос. Проверь его состояние в поиске.'
+            elif result == 'profile_changed':
+                message = 'Данные пациента изменились. Обнови список записей.'
+            else:
+                self._visits_unverified.add(visit.key)
+                message = ('Этот талон можно отменить на сайте Горздрава.' if result == 'referral' else
+                           'Горздрав пока не подтвердил отмену. Проверь талон на сайте.')
+            self._notice('visits', message, error=result not in ('cancelled', 'absent'))
+            self.changed.emit()
+
+        self._background(operation, done)
 
     @Slot()
     def newSearch(self):
@@ -412,6 +581,7 @@ class DesktopApp(QObject):
         if name == 'patient':
             if key in self.plan['patients'] and key != form.patient:
                 form.patient = key
+                form.card_error = ''
                 form.clear_source()
         else:
             option = next((row for row in form.options.get(name, []) if str(row['id']) == key), None)
@@ -421,6 +591,8 @@ class DesktopApp(QObject):
             if str(previous.get('id')) == key:
                 return
             form.choices[name] = option
+            if name in ('district', 'clinic'):
+                form.card_error = ''
             if name in FIELD_LABELS:
                 form.clear_source()
                 next_level = CATALOG.index(name) + 1
@@ -510,7 +682,7 @@ class DesktopApp(QObject):
     @Slot()
     def searchAction(self):
         phase = self._phase(self.selected)
-        if phase == 'stopping':
+        if phase in ('stopping', 'checking_card'):
             return
         if phase in JOB_ACTIVE:
             try:
@@ -527,13 +699,13 @@ class DesktopApp(QObject):
         prior = self.plan['jobs'].get(tab, {})
         try:
             job = self.form.build(prior.get('target', {}), self.plan['patients'])
-            scope = _job_scope(job)
+            scope = job_scope(job)
             transfer = transfer_key(job)
             for other, existing in self.plan['jobs'].items():
                 if other == tab:
                     continue
                 same_transfer = transfer and transfer == transfer_key(existing)
-                if not same_transfer and _job_scope(existing) != scope:
+                if not same_transfer and job_scope(existing) != scope:
                     continue
                 if other in self.open_jobs or tab not in self.drafts or key != tab:
                     raise ValueError('Для этого приёма уже есть автоперенос.' if same_transfer
@@ -542,7 +714,7 @@ class DesktopApp(QObject):
         except (ValueError, KeyError) as error:
             self._notice('search', str(error), error=True, field=getattr(error, 'field', ''))
             return
-        if prior and _job_scope(prior) == scope:
+        if prior and job_scope(prior) == scope:
             job = {**prior, **job, 'target': {**prior['target'], **job['target']}}
         else:
             job['revision'] = uuid4().hex
@@ -569,10 +741,40 @@ class DesktopApp(QObject):
         if not accepted or not pending:
             return
         tab, key, job = pending
+        form = self.forms[tab]
+        profile = self.plan['patients'].get(job['patient'])
+        self._notice('search')
+        if not profile_is_ready(profile):
+            form.card_error = 'Заполни ФИО и дату рождения в разделе «Пациенты».'
+            self.changed.emit()
+            return
+        form.card_error = ''
+        form.card_checking = True
+        self.changed.emit()
+
+        def check():
+            client = self._client()
+            with client.s:
+                return clinic_patient_id(client, str(job['target']['lpu_id']), profile, fresh=True)
+
+        def done(card_id, error):
+            form.card_checking = False
+            if error:
+                form.card_error = 'Не удалось проверить медкарту на Горздраве. Запусти поиск ещё раз.'
+            elif not card_id:
+                form.card_error = ('Поликлиника не нашла медкарту. Проверь ФИО и дату рождения. '
+                                   'Если всё верно, уточни данные в регистратуре.')
+            else:
+                self._start_checked_search(tab, key, job, (profile, card_id))
+            self.changed.emit()
+
+        self._background(check, done)
+
+    def _start_checked_search(self, tab, key, job, checked_card):
         try:
-            start_desktop_job(key, job, self.legacy_profile)
+            start_desktop_job(key, job, self.legacy_profile, checked_card=checked_card)
         except (OSError, ValueError) as error:
-            self._notice('search', str(error), error=True)
+            self.forms[tab].card_error = str(error)
         else:
             if tab != key:
                 self.forms[key] = self.forms.pop(tab)
@@ -580,8 +782,12 @@ class DesktopApp(QObject):
                 if self.selected == tab:
                     self.selected = key
             self.open_jobs.add(key)
-            self._notice('search')
             self._refresh()
+
+    @Slot()
+    def openAttachmentCheck(self):
+        if not QDesktopServices.openUrl(QUrl(ATTACHMENT_CHECK_URL)):
+            self._notice('search', 'Не удалось открыть страницу проверки прикрепления.', error=True)
 
     def _can_add_patient(self):
         return self.runtime['phase'] == 'running' and self.runtime.get('live_plan', False)
@@ -793,6 +999,7 @@ def create_window(*, load_catalog=True, check_updates=False):
     application.setApplicationVersion(__version__)
     controller = DesktopApp(load_catalog=load_catalog)
     engine = QQmlApplicationEngine()
+    engine.addImageProvider('lucide', LucideIcons())
     engine.setInitialProperties({'bridge': controller})
     engine.load(QUrl.fromLocalFile(str(Path(__file__).with_name('qml') / 'Main.qml')))
     if not engine.rootObjects() or not isinstance(engine.rootObjects()[0], QQuickWindow):

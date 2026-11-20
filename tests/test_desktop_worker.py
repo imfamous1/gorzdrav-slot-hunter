@@ -8,6 +8,7 @@ import unittest
 
 from gorzdrav_hunter import desktop_worker as worker
 from gorzdrav_hunter.booker import Booker
+from gorzdrav_hunter.client import AttachmentDenied, GorzdravClient, GorzdravError
 from gorzdrav_hunter.config import _read_json, _write_json
 from gorzdrav_hunter.desktop_plan import apply_plan, read_plan
 from gorzdrav_hunter.process_lock import is_locked, process_lock
@@ -58,6 +59,43 @@ class DesktopWorkerTests(unittest.TestCase):
         result = booker._create_with_retries({}, None, {})
         self.assertEqual('declined', result)
         client.appointment_create.assert_not_called()
+
+    def test_explicit_attachment_refusal_is_not_retried(self):
+        client = GorzdravClient()
+        booker = Booker(client, None, Mock())
+        message = 'Пациент не прикреплён к медицинской организации.'
+        with patch.object(client, '_call', side_effect=GorzdravError(1, message)) as call:
+            with self.assertRaises(AttachmentDenied):
+                booker._create_with_retries({}, None, {})
+            call.assert_called_once()
+        with patch.object(client, '_call', side_effect=GorzdravError(620, 'Проверьте прикрепление по ОМС.')):
+            with self.assertRaises(GorzdravError) as error:
+                client.appointment_create({})
+            self.assertNotIsInstance(error.exception, AttachmentDenied)
+
+    def test_attachment_refusal_stops_one_job_and_allows_restart(self):
+        state = {}
+        target = {'lpu_id': 1, 'specialty_ids': ['eye'], 'book_date_from': '2031-05-10'}
+        status = {'phase': 'running', 'id': 'run', 'per_job': True}
+        jobs = {key: {'target': {**target, 'lpu_id': index}, 'run': {'worker': 'run', 'token': key}}
+                for index, key in enumerate(('first', 'second'), 1)}
+        plan = {'patients': {}, 'jobs': jobs}
+        group = worker.DesktopSearchGroup(
+            {'http': {'sleep_between_requests_sec': 1}}, plan, state, Mock(), lambda: False,
+            load_plan=lambda: plan, run_id='run',
+        )
+        first, second = dict(group.jobs).values()
+        first.scan_once = Mock(side_effect=AttachmentDenied(8))
+        second.scan_once = Mock(return_value=False)
+        with patch.object(worker, 'save_state'), patch.object(worker.time, 'sleep'):
+            group.scan_once(state)
+            group.scan_once(state)
+        self.assertEqual('attachment_denied', worker.job_phase(status, jobs['first'], group.states['first']))
+        self.assertEqual('running', worker.job_phase(status, jobs['second'], group.states['second']))
+        first.scan_once.assert_called_once()
+        self.assertEqual(2, second.scan_once.call_count)
+        jobs['first']['run']['token'] = 'restart'
+        self.assertEqual('starting', worker.job_phase(status, jobs['first'], group.states['first']))
 
     def test_tabs_can_start_stop_and_restart_in_one_worker(self):
         config = self.root / 'config.json'

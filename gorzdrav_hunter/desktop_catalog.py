@@ -50,14 +50,20 @@ def fetch_catalog(client, level, choices):
     return [ANY_DOCTOR, *options] if level == 'doctor' else options
 
 
+def clinic_patient_id(client, clinic_id, profile, *, fresh=False):
+    cached = (profile.get('patient_ids') or {}).get(clinic_id)
+    if cached and not fresh:
+        return str(cached)
+    return client.patient_search(
+        int(clinic_id), profile['last_name'].strip(), profile['first_name'].strip(),
+        (profile.get('middle_name') or '').strip(), birthdate_iso(profile['birthdate']),
+        profile['birthdate'].strip(),
+    )
+
+
 def fetch_appointments(client, clinic_id, spec_id, profile):
     with client.s:
-        patient = (profile.get('patient_ids') or {}).get(clinic_id)
-        if not patient:
-            patient = client.patient_search(
-                int(clinic_id), profile['last_name'], profile['first_name'], profile.get('middle_name', ''),
-                birthdate_iso(profile['birthdate']), profile['birthdate'],
-            )
+        patient = clinic_patient_id(client, clinic_id, profile)
         if not patient:
             return []
         matches = []

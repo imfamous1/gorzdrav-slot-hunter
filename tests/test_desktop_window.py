@@ -25,10 +25,10 @@ class DesktopWindowTests(TestCase):
 def check_window():
     from datetime import date, timedelta
     from time import monotonic, sleep
-    from unittest.mock import patch
+    from unittest.mock import MagicMock, patch
 
-    from PySide6.QtCore import QPoint, QPointF, Qt
-    from PySide6.QtGui import QInputMethodEvent
+    from PySide6.QtCore import QObject, QPoint, QPointF, Qt, QUrl, Slot
+    from PySide6.QtGui import QDesktopServices, QInputMethodEvent
     from PySide6.QtTest import QTest
 
     from gorzdrav_hunter import __version__
@@ -54,7 +54,8 @@ def check_window():
     }
     stopped = {'target': {**target, 'auto_book': False}, 'enabled': False}
     _write_json(CONFIG_PATH, apply_plan({}, {
-        'patients': {'patient': {'last_name': 'Примерова', 'first_name': 'Анна'}},
+        'patients': {'patient': {'last_name': 'Примерова', 'first_name': 'Анна',
+                                 'birthdate': '14.02.1990', 'patient_ids': {'1': 'demo-patient'}}},
         'jobs': {'old': stopped, 'working': working},
     }))
     _write_json(STATE_PATH, {'desktop_jobs': {
@@ -102,19 +103,47 @@ def check_window():
             event.setCommitString(text)
             application.sendEvent(item, event)
 
+        def capture(directory, name):
+            if directory:
+                QTest.mouseMove(window, QPoint(12, 12))
+                QTest.qWait(150)
+                image = window.grabWindow()
+                assert not image.isNull() and image.save(str(Path(directory) / name))
+
         wait_for(lambda: window.isExposed() and locate('searchTab_working') is not None)
         rail = locate('navigationRail')
-        for name in ('navigationBrand', 'nav_search', 'nav_patient', 'nav_telegram', 'nav_history'):
+        for name in ('navigationBrand', 'nav_search', 'nav_patient', 'nav_telegram', 'nav_visits',
+                     'supportProject', 'updatesMenu'):
             item = locate(name)
             x = rail.mapFromScene(item.mapToScene(QPointF())).x()
             right = rail.width() - x - item.width()
             assert abs(16 - x) < 0.5 and abs(x - right) < 0.5, (name, x, right)
         assert tab_names() == ['working']
         assert locate('searchAction').property('text') == 'Остановить поиск'
+        assert locate('searchAction').property('glyph') == 'search-x'
+        assert locate('newSearch').property('glyph') == 'list-plus'
         assert locate('limitSearchTime').property('checked')
         assert locate('searchTimeFromInput').property('text') == '09:00'
         assert not locate('searchTimeFromInput').isEnabled()
         assert locate('updatesMenu').property('text') == f'Версия {__version__}'
+        support = locate('supportProject')
+        assert support.property('text') == 'Поддержать проект'
+        assert abs(locate('supportCaption').mapToScene(QPointF()).x()
+                   - support.mapToScene(QPointF()).x()) < 1
+        assert support.mapToScene(QPointF(0, support.height())).y() <= locate('updatesMenu').mapToScene(QPointF()).y()
+
+        class LinkRecorder(QObject):
+            @Slot(QUrl)
+            def record(self, url):
+                self.url = url.toString()
+
+        recorder = LinkRecorder()
+        QDesktopServices.setUrlHandler('https', recorder, 'record')
+        try:
+            click('supportProject')
+            assert recorder.url == 'https://pay.cloudtips.ru/p/433a83a0'
+        finally:
+            QDesktopServices.unsetUrlHandler('https')
 
         release = Release('v9.9.9', 'fixture.zip', 1, '0' * 64)
         with patch('gorzdrav_hunter.desktop.check_release', return_value=release), patch(
@@ -144,6 +173,13 @@ def check_window():
         draft = bridge.selected
         assert bridge.view['phase'] == 'draft'
         assert locate('searchAction').property('text') == 'Запустить поиск'
+        assert locate('searchAction').property('glyph') == 'search'
+        with patch('gorzdrav_hunter.desktop.QDesktopServices') as desktop_services:
+            click('attachmentCheck')
+            assert desktop_services.openUrl.call_args.args[0].toString() == 'https://gorzdrav.spb.ru/service-oms-check'
+        assert bridge.view['phase'] == 'draft'
+        attachment_preview = os.environ.get('GORZDRAV_ATTACHMENT_PREVIEW')
+        capture(attachment_preview, 'search-before-start.png')
         assert not locate('limitSearchTime').property('checked')
         assert not locate('searchTimeFromInput').isVisible()
         click('limitSearchTime')
@@ -192,6 +228,8 @@ def check_window():
         click('nav_patient')
         bridge.selectPatient('')
         wait_for(lambda: locate('patientSurnameInput') is not None)
+        patient_card = locate('patientCard')
+        assert abs(patient_card.width() - patient_card.parentItem().width()) < 1
         name = locate('patientNameInput')
         surname = locate('patientSurnameInput')
         wait_for(lambda: abs(name.width() - surname.width()) < 1)
@@ -220,6 +258,8 @@ def check_window():
 
         click('nav_telegram')
         wait_for(lambda: locate('telegramSwitch') is not None)
+        telegram_card = locate('telegramCard')
+        assert abs(telegram_card.width() - telegram_card.parentItem().width()) < 1
         toggle = locate('telegramSwitch')
         assert toggle.property('text').endswith('выключены')
         click('telegramSwitch')
@@ -229,10 +269,89 @@ def check_window():
         assert not bridge.view['telegram']['enabled']
         assert toggle.property('text').endswith('выключены')
 
-        click('nav_history')
-        wait_for(lambda: not locate('searchAction').isVisible())
+        common = {'lpuId': '1', 'lpuShortName': 'Учебная поликлиника № 52',
+                  'lpuAddress': 'ул. Примерная, 12', 'patientId': 'demo-patient'}
+        soon = {**common, 'appointmentId': 'first', 'visitStart': visit, 'room': '214',
+                'specialityRendingConsultation': {'name': 'Офтальмология'},
+                'doctorRendingConsultation': {'name': 'Соколова Мария Андреевна'}}
+        later = {**common, 'appointmentId': 'second', 'visitStart': start + 'T14:45:00',
+                 'lpuShortName': 'Учебная поликлиника № 52 · отделение № 2', 'lpuAddress': 'ул. Учебная, 8',
+                 'isAppointmentByReferral': True,
+                 'specialityRendingConsultation': {'name': 'Неврология'},
+                 'doctorRendingConsultation': {'name': 'Волков Илья Сергеевич'}}
+        client = MagicMock()
+        client.patient_appointments.side_effect = [[later, soon], [later, soon], [later]]
+        client.appointment_cancel.return_value = True
+        with patch.object(bridge, '_client', return_value=client), patch(
+            'gorzdrav_hunter.desktop.QDesktopServices',
+        ) as desktop_services:
+            click('nav_visits')
+            wait_for(lambda: len(bridge.visits['rows']) == 2)
+            assert not locate('searchAction').isVisible()
+            assert not locate('attachmentCheck').isVisible()
+            assert [row['title'] for row in bridge.visits['rows']] == ['Офтальмология', 'Неврология']
+            assert locate('addVisitToCalendar').property('glyph') == 'calendar-plus'
+            assert locate('cancelVisit').property('glyph') == 'calendar-x'
+            preview_dir = os.environ.get('GORZDRAV_VISITS_PREVIEW')
+
+            capture(preview_dir, 'my-visits.png')
+            window.setWidth(window.minimumWidth())
+            capture(preview_dir, 'my-visits-compact.png')
+            window.setWidth(1120)
+
+            click('visitsPortal')
+            assert desktop_services.openUrl.call_args.args[0].toString() == 'https://gorzdrav.spb.ru/lk-visits'
+
+            click('cancelVisit')
+            capture(preview_dir, 'cancel-visit.png')
+            QTest.keyClick(window, Qt.Key.Key_Escape)
+            wait_for(lambda: locate('acceptVisitCancellation') is None
+                     or not locate('acceptVisitCancellation').isVisible())
+            client.appointment_cancel.assert_not_called()
+
+            click('addVisitToCalendar')
+            event_path = Path(desktop_services.openUrl.call_args.args[0].toLocalFile())
+            payload = event_path.read_bytes()
+            assert b'DTSTART:' + visit[:10].replace('-', '').encode() + b'T052000Z' in payload
+            assert b'TRIGGER:-PT1H' in payload
+            assert 'Примерова'.encode() not in payload
+
+            click('cancelVisit')
+            click('acceptVisitCancellation')
+            wait_for(lambda: len(bridge.visits['rows']) == 1)
+            client.appointment_cancel.assert_called_once_with({
+                'appointmentId': 'first', 'lpuId': '1', 'patientId': 'demo-patient', 'esiaId': None,
+            })
+            assert 'подтвердил отмену' in bridge.notices['visits']['text']
+            assert locate('cancelVisit').property('glyph') == 'external-link'
+            click('cancelVisit')
+            assert desktop_services.openUrl.call_args.args[0].toString() == 'https://gorzdrav.spb.ru/service-cancel'
+            assert client.appointment_cancel.call_count == 1
         click('nav_search')
         wait_for(lambda: locate('searchAction').isVisible())
+        bridge.selectSearch('working')
+        _write_json(STATE_PATH, {'desktop_jobs': {
+            'working': {'phase': 'attachment_denied', 'run_token': 'active'},
+        }})
+        bridge._refresh()
+        wait_for(lambda: locate('attachmentCheck').isVisible())
+        assert locate('searchStatus').property('text') == 'Запись отклонена'
+        assert not locate('searchPoll').isVisible()
+        feedback = locate('searchFeedback')
+        check_attachment = locate('attachmentCheck')
+        start_search = locate('searchAction')
+
+        def center_y(item):
+            return item.mapToScene(item.boundingRect().center()).y()
+
+        wait_for(lambda: abs(center_y(feedback) - center_y(start_search)) < 1)
+        assert abs(center_y(check_attachment) - center_y(start_search)) < 1
+        assert check_attachment.height() == start_search.height()
+        capture(attachment_preview, 'attachment-denied.png')
+        window.setWidth(window.minimumWidth())
+        wait_for(lambda: center_y(feedback) < center_y(start_search) - start_search.height() / 2)
+        assert abs(center_y(check_attachment) - center_y(start_search)) < 1
+        capture(attachment_preview, 'attachment-denied-compact.png')
         window.close()
         application.processEvents()
         reopened = DesktopApp(load_catalog=False)

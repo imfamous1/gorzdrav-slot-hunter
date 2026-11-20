@@ -49,7 +49,7 @@ ColumnLayout {
                 elide: Text.ElideRight
             }
             Icon {
-                glyph: "down"
+                glyph: "chevron-down"
                 tint: T.quiet
                 Layout.preferredWidth: 19
                 Layout.preferredHeight: 19
