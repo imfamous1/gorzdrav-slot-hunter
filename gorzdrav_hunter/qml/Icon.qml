@@ -30,6 +30,10 @@ Canvas {
         case "cross":
             path([12, 5, 12, 19]); path([5, 12, 19, 12])
             break
+        case "check":
+            c.lineWidth = 2.4
+            path([5, 12, 10, 17, 19, 7])
+            break
         case "search":
             circle(10.5, 10.5, 5.7); path([15, 15, 20, 20])
             break

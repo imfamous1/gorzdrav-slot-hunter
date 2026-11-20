@@ -609,7 +609,7 @@ ApplicationWindow {
                                 onEdited: value => win.bridge.setSearch("end", value)
                             }
                         }
-                        CheckBox {
+                        AppCheckBox {
                             id: limitTime
                             objectName: "limitSearchTime"
                             readonly property string warning: "Ограничение по времени может снизить шансы поймать талон."
@@ -617,15 +617,6 @@ ApplicationWindow {
                             text: "Ограничить время приёма"
                             checked: win.viewData.timeLimited
                             enabled: win.viewData.editable
-                            padding: 0
-                            font.pixelSize: 13
-                            font.weight: Font.DemiBold
-                            palette.windowText: enabled ? T.ink : T.muted
-                            palette.base: checked ? T.accentSoft : T.surface
-                            palette.text: T.accent
-                            palette.mid: checked ? T.accent : T.quiet
-                            palette.light: T.accentSoft
-                            palette.highlight: T.accent
                             Accessible.description: warning
                             ToolTip.visible: enabled && !checked && (hovered || visualFocus)
                             ToolTip.delay: 400
