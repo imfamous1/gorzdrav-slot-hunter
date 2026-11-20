@@ -70,19 +70,19 @@ ColumnLayout {
             margins: 12
             focus: true
             closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+            onAboutToShow: filter.clear()
             onOpened: {
-                filter.text = ""
                 optionsList.currentIndex = optionsList.count > 0 ? 0 : -1
                 if (field.searchable) filter.forceActiveFocus()
                 else optionsList.forceActiveFocus()
             }
             onClosed: trigger.forceActiveFocus()
-            function select(index) {
-                if (index >= 0 && index < optionsList.count) {
-                    const option = optionsList.model[index]
-                    listPopup.close()
-                    field.chosen(String(option.id))
-                }
+            function select(option) {
+                if (!option)
+                    return
+                const id = String(option.id)
+                listPopup.close()
+                field.chosen(id)
             }
             background: Rectangle {
                 color: T.surface
@@ -93,36 +93,50 @@ ColumnLayout {
                 spacing: 6
                 TextField {
                     id: filter
+                    objectName: field.objectName ? field.objectName + "Filter" : ""
                     visible: field.searchable
                     Layout.fillWidth: true
                     implicitHeight: 35
                     font.pixelSize: 13
+                    color: T.ink
                     placeholderText: "Введите для поиска"
+                    placeholderTextColor: T.quiet
+                    selectionColor: T.accent
+                    selectedTextColor: T.surface
                     Accessible.name: "Фильтр: " + field.title
-                    background: Rectangle { color: T.input; radius: 8; border.color: T.border }
+                    background: Rectangle {
+                        color: T.input
+                        radius: 8
+                        border.color: filter.activeFocus ? T.accent : T.border
+                    }
                     Keys.onDownPressed: optionsList.incrementCurrentIndex()
                     Keys.onUpPressed: optionsList.decrementCurrentIndex()
-                    onAccepted: listPopup.select(optionsList.currentIndex)
-                    onTextEdited: optionsList.currentIndex = 0
+                    onAccepted: optionsList.chooseCurrent()
+                    onTextEdited: optionsList.currentIndex = optionsList.count > 0 ? 0 : -1
                 }
                 ListView {
                     id: optionsList
                     Layout.fillWidth: true
                     Layout.preferredHeight: Math.max(36, Math.min(232, count * 36))
                     clip: true
-                    model: listPopup.visible && field.searchable && filter.text ? field.bridge.filterChoices(field.options, filter.text) : field.options
+                    model: field.searchable && field.bridge && filter.text
+                           ? field.bridge.filterChoices(field.options, filter.text) : field.options
                     keyNavigationEnabled: true
-                    Keys.onReturnPressed: listPopup.select(currentIndex)
-                    Keys.onEnterPressed: listPopup.select(currentIndex)
+                    function chooseCurrent() {
+                        if (currentItem)
+                            listPopup.select(currentItem.modelData)
+                    }
+                    Keys.onReturnPressed: chooseCurrent()
+                    Keys.onEnterPressed: chooseCurrent()
                     delegate: ItemDelegate {
                         required property var modelData
-                        required property int index
+                        objectName: field.objectName ? field.objectName + "Option_" + modelData.id : ""
                         width: ListView.view.width
                         height: 36
                         text: modelData.label || modelData.name
                         highlighted: ListView.isCurrentItem
                         hoverEnabled: true
-                        onClicked: listPopup.select(index)
+                        onClicked: listPopup.select(modelData)
                         contentItem: Text {
                             text: parent.text
                             color: T.ink

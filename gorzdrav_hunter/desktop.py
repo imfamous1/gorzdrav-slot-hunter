@@ -1,6 +1,7 @@
 """Контроллер настольного интерфейса Qt Quick."""
 from __future__ import annotations
 
+from calendar import monthrange
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -36,6 +37,7 @@ PHASES = {
 }
 EVENT_LABELS = {'OK': 'Подтверждение', 'WARN': 'Предупреждение', 'ERR': 'Ошибка', 'SLOT': 'Свободный талон'}
 PATIENT_FIELDS = ('last_name', 'first_name', 'middle_name', 'birthdate')
+MAX_PATIENT_AGE = 120
 FIELD_LABELS = {'district': 'район', 'clinic': 'поликлинику', 'specialty': 'специальность'}
 
 
@@ -46,8 +48,17 @@ def parse_date(text):
     return date.fromisoformat(text)
 
 
+def _birthdate_text(value):
+    try:
+        birthday = parse_date(value)
+    except ValueError:
+        return value
+    return f'{birthday.day:02}.{birthday.month:02}.{birthday.year:04}'
+
+
 def _person_key(profile):
-    return tuple((profile.get(key) or '').strip().casefold() for key in PATIENT_FIELDS)
+    names = tuple((profile.get(key) or '').strip().casefold() for key in PATIENT_FIELDS[:-1])
+    return (*names, _birthdate_text((profile.get('birthdate') or '').strip()))
 
 
 def _job_scope(job):
@@ -188,7 +199,7 @@ class DesktopApp(QObject):
         self.open_jobs = self._reopen_jobs()
         self.selected = next((key for key in self.plan['jobs'] if key in self.open_jobs), '')
         self.patient_id = next(iter(self.plan['patients']), '')
-        self.patient_form = dict(self.plan['patients'].get(self.patient_id, {}))
+        self.patient_form = self._patient_values(self.patient_id)
         self.telegram_form = dict(self.config.get('telegram', {}))
         self.telegram_busy = False
         self._notices = {}
@@ -532,9 +543,14 @@ class DesktopApp(QObject):
     @Slot(str)
     def selectPatient(self, key):
         self.patient_id = key if key in self.plan['patients'] else ''
-        self.patient_form = dict(self.plan['patients'].get(self.patient_id, {}))
+        self.patient_form = self._patient_values(self.patient_id)
         self._notice('patient')
         self.changed.emit()
+
+    def _patient_values(self, key):
+        values = dict(self.plan['patients'].get(key, {}))
+        values['birthdate'] = _birthdate_text(values.get('birthdate') or '')
+        return values
 
     @Slot(str, str)
     def setPatient(self, key, value):
@@ -550,12 +566,17 @@ class DesktopApp(QObject):
                 if not values[key]:
                     raise FormError(key, f'Введи {label} пациента.')
             try:
-                birthday = parse_date(values['birthdate'])
-                if birthday > date.today():
+                if not re.fullmatch(r'[0-9]{2}\.[0-9]{2}\.[0-9]{4}', values['birthdate']):
                     raise ValueError
+                birthday = parse_date(values['birthdate'])
             except ValueError:
-                raise FormError('birthdate', 'Проверь дату рождения.') from None
-            values['birthdate'] = birthday.strftime('%d.%m.%Y')
+                raise FormError('birthdate', 'Введи существующую дату в формате ДД.ММ.ГГГГ.') from None
+            today = date.today()
+            earliest_year = today.year - MAX_PATIENT_AGE
+            earliest_day = min(today.day, monthrange(earliest_year, today.month)[1])
+            earliest = date(earliest_year, today.month, earliest_day)
+            if not earliest <= birthday <= today:
+                raise FormError('birthdate', f'Дата рождения должна быть с {earliest:%d.%m.%Y} по {today:%d.%m.%Y}.')
             key = self.patient_id or uuid4().hex
             live = self.runtime['phase'] in ACTIVE_PHASES
             if live:

@@ -102,3 +102,25 @@ class DesktopSessionsTests(TestCase):
         self.assertNotIn(draft, saved)
         self.assertEqual(self.jobs['watching'], saved['watching'])
         self.assertEqual(self.state, self.read_json(self.state_path))
+
+    def test_patient_birthdate_has_calendar_bounds(self):
+        from datetime import date, timedelta
+
+        self.status['phase'] = 'idle'
+        controller = self.open_session()
+        controller.selectPatient('')
+        controller.setPatient('first_name', 'Анна')
+        controller.setPatient('last_name', 'Примерова')
+        today = date.today()
+        next_day = today + timedelta(days=1)
+        for invalid in ('29.02.2001', '11.11.1000', next_day.strftime('%d.%m.%Y')):
+            with self.subTest(invalid=invalid):
+                controller.setPatient('birthdate', invalid)
+                controller.savePatient()
+                self.assertEqual('birthdate', controller.notices['patient']['field'])
+                self.assertEqual({'test'}, set(controller.plan['patients']))
+
+        controller.setPatient('birthdate', today.strftime('%d.%m.%Y'))
+        controller.savePatient()
+        profile = self.read_json(self.config_path)['desktop_plan']['patients'][controller.patient_id]
+        self.assertEqual(today.strftime('%d.%m.%Y'), profile['birthdate'])

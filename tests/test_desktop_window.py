@@ -28,6 +28,7 @@ def check_window():
     from unittest.mock import patch
 
     from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QInputMethodEvent
     from PySide6.QtTest import QTest
 
     from gorzdrav_hunter.config import CONFIG_PATH, STATE_PATH, _write_json
@@ -94,6 +95,11 @@ def check_window():
         def tab_names():
             return [tab['id'] for tab in bridge.view['tabs']]
 
+        def enter_text(item, text):
+            event = QInputMethodEvent()
+            event.setCommitString(text)
+            application.sendEvent(item, event)
+
         wait_for(lambda: window.isExposed() and locate('searchTab_working') is not None)
         rail = locate('navigationRail')
         for name in ('navigationBrand', 'nav_search', 'nav_patient', 'nav_telegram', 'nav_history'):
@@ -124,9 +130,72 @@ def check_window():
         wait_for(lambda: bridge.selected == draft)
         assert bridge.view['start'] == '05.12.2031'
 
-        for page in ('patient', 'telegram', 'history'):
-            click('nav_' + page)
-            wait_for(lambda: not locate('searchAction').isVisible())
+        bridge.form.options['district'] = [
+            {'id': 1, 'name': 'Адмиралтейский'},
+            {'id': 2, 'name': 'Выборгский'},
+            {'id': 3, 'name': 'Приморский'},
+            {'id': 4, 'name': 'Пушкинский'},
+        ]
+        bridge.changed.emit()
+        with patch.object(bridge, '_load_catalog') as load_catalog:
+            def filter_district(text):
+                click('districtTrigger')
+                wait_for(lambda: (field := locate('districtFilter')) is not None and field.hasActiveFocus())
+                enter_text(locate('districtFilter'), text)
+                wait_for(lambda: locate('districtOption_1') is None)
+                QTest.qWait(150)
+
+            filter_district('п')
+            click('districtOption_4')
+            wait_for(lambda: bridge.view['choices'].get('district') == 'Пушкинский')
+            load_catalog.assert_called_once_with(bridge.form, 'clinic')
+
+            filter_district('прим')
+            QTest.keyClick(window, Qt.Key.Key_Return)
+            wait_for(lambda: bridge.view['choices'].get('district') == 'Приморский')
+
+        click('nav_patient')
+        bridge.selectPatient('')
+        wait_for(lambda: locate('patientSurnameInput') is not None)
+        name = locate('patientNameInput')
+        surname = locate('patientSurnameInput')
+        wait_for(lambda: abs(name.width() - surname.width()) < 1)
+        name_x = name.mapToScene(QPointF()).x()
+        click('patientSurnameInput')
+        enter_text(surname, 'W' * 100)
+        assert bridge.patient_form['last_name'] == 'W' * 100
+        QTest.qWait(150)
+        assert abs(name.mapToScene(QPointF()).x() - name_x) < 1
+        assert abs(name.width() - surname.width()) < 1
+        bridge.setPatient('first_name', 'Анна')
+        click('patientBirthdateInput')
+        for digit in '29022000':
+            QTest.keyClick(window, ord(digit))
+        birthdate = locate('patientBirthdateInput')
+        assert birthdate.property('displayText') == '29.02.2000', (
+            birthdate.property('displayText'), birthdate.property('cursorPosition'), birthdate.hasActiveFocus(),
+        )
+        assert bridge.patient_form['birthdate'] == '29.02.2000'
+        birthdate.setProperty('cursorPosition', 0)
+        QTest.keyClick(window, Qt.Key.Key_Delete)
+        assert bridge.patient_form['birthdate'] == '_9.02.2000'
+        click('savePatient')
+        assert bridge.notices['patient']['field'] == 'birthdate'
+        assert birthdate.hasActiveFocus()
+
+        click('nav_telegram')
+        wait_for(lambda: locate('telegramSwitch') is not None)
+        toggle = locate('telegramSwitch')
+        assert toggle.property('text').endswith('выключены')
+        click('telegramSwitch')
+        assert bridge.view['telegram']['enabled']
+        assert toggle.property('text').endswith('включены')
+        click('telegramSwitch')
+        assert not bridge.view['telegram']['enabled']
+        assert toggle.property('text').endswith('выключены')
+
+        click('nav_history')
+        wait_for(lambda: not locate('searchAction').isVisible())
         click('nav_search')
         wait_for(lambda: locate('searchAction').isVisible())
         window.close()

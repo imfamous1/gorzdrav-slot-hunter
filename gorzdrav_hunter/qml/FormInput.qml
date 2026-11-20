@@ -10,6 +10,7 @@ ColumnLayout {
     property string placeholder: ""
     property bool secret: false
     property bool invalid: false
+    property string numericMask: ""
     signal edited(string value)
     function focusInput() { input.forceActiveFocus() }
 
@@ -22,12 +23,14 @@ ColumnLayout {
     }
     TextField {
         id: input
+        objectName: field.objectName ? field.objectName + "Input" : ""
         Layout.fillWidth: true
         Layout.minimumWidth: 38
         implicitHeight: 43
         leftPadding: 12
         rightPadding: 12
         text: field.value
+        inputMask: field.numericMask
         placeholderText: field.placeholder
         placeholderTextColor: T.quiet
         color: enabled ? T.ink : T.muted
@@ -35,7 +38,11 @@ ColumnLayout {
         font.pixelSize: 13
         echoMode: field.secret ? TextInput.Password : TextInput.Normal
         Accessible.name: field.title
-        onTextEdited: field.edited(text)
+        onTextEdited: field.edited(inputMask ? getText(0, length) : text)
+        onCursorPositionChanged: {
+            if (inputMask && cursorPosition > 0 && !/[0-9]/.test(text))
+                cursorPosition = 0
+        }
         background: Rectangle {
             radius: 10
             antialiasing: true

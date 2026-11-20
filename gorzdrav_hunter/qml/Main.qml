@@ -652,16 +652,19 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         enabled: win.viewData.patientEditable
                         columns: 2
+                        uniformCellWidths: true
                         columnSpacing: 12
                         rowSpacing: 12
                         FormInput {
                             id: surname
+                            objectName: "patientSurname"
                             Layout.fillWidth: true
                             title: "Фамилия"; value: win.viewData.patientForm.last_name
                             invalid: win.notice.field === "last_name"
                             onEdited: value => win.bridge.setPatient("last_name", value)
                         }
                         FormInput {
+                            objectName: "patientName"
                             Layout.fillWidth: true
                             title: "Имя"; value: win.viewData.patientForm.first_name
                             invalid: win.notice.field === "first_name"
@@ -673,19 +676,31 @@ ApplicationWindow {
                             onEdited: value => win.bridge.setPatient("middle_name", value)
                         }
                         FormInput {
+                            id: birthdate
+                            objectName: "patientBirthdate"
                             Layout.fillWidth: true
-                            title: "Дата рождения"; placeholder: "ДД.ММ.ГГГГ"; value: win.viewData.patientForm.birthdate
+                            title: "Дата рождения"
+                            numericMask: "00.00.0000;_"
+                            value: win.viewData.patientForm.birthdate
                             invalid: win.notice.field === "birthdate"
                             onEdited: value => win.bridge.setPatient("birthdate", value)
                         }
                     }
                     AppButton {
+                        objectName: "savePatient"
                         Layout.alignment: Qt.AlignRight
                         variant: "primary"
                         enabled: win.viewData.patientEditable
                         text: "Сохранить пациента"
                         onClicked: win.bridge.savePatient()
                     }
+                }
+            }
+            Connections {
+                target: win.bridge
+                function onFocusRequested(field) {
+                    if (field === "birthdate")
+                        birthdate.focusInput()
                 }
             }
         }
@@ -700,8 +715,21 @@ ApplicationWindow {
                 contentItem: ColumnLayout {
                     spacing: 15
                     Switch {
-                        text: "Уведомления о талонах и записи"
+                        id: notifications
+                        objectName: "telegramSwitch"
+                        Layout.fillWidth: true
+                        text: checked ? "Уведомления о талонах и записи включены"
+                                      : "Уведомления о талонах и записи выключены"
                         checked: win.viewData.telegram.enabled
+                        font.pixelSize: 13
+                        font.weight: Font.DemiBold
+                        palette.windowText: T.ink
+                        palette.dark: T.accent
+                        palette.midlight: T.quiet
+                        palette.mid: T.muted
+                        palette.window: T.surface
+                        palette.light: T.accentSoft
+                        palette.highlight: notifications.checked ? T.accentHover : T.accent
                         onToggled: win.bridge.toggleTelegram(checked)
                     }
                     FormInput {
